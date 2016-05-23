@@ -96,7 +96,7 @@ F</etc/passwd> asynchronously:
          print $contents;
 
          # exit event loop and program
-         EV::unloop;
+         EV::break;
       };
    };
 
@@ -104,7 +104,7 @@ F</etc/passwd> asynchronously:
    # check for sockets etc. etc.
 
    # process events as long as there are some:
-   EV::loop;
+   EV::run;
 
 =head1 REQUEST ANATOMY AND LIFETIME
 
@@ -169,13 +169,13 @@ use common::sense;
 use base 'Exporter';
 
 BEGIN {
-   our $VERSION = 4.32;
+   our $VERSION = 4.34;
 
    our @AIO_REQ = qw(aio_sendfile aio_seek aio_read aio_write aio_open aio_close
                      aio_stat aio_lstat aio_unlink aio_rmdir aio_readdir aio_readdirx
-                     aio_scandir aio_symlink aio_readlink aio_realpath aio_sync
-                     aio_fsync aio_syncfs aio_fdatasync aio_sync_file_range aio_allocate
-                     aio_pathsync aio_readahead aio_fiemap
+                     aio_scandir aio_symlink aio_readlink aio_realpath aio_fcntl aio_ioctl
+                     aio_sync aio_fsync aio_syncfs aio_fdatasync aio_sync_file_range
+                     aio_pathsync aio_readahead aio_fiemap aio_allocate
                      aio_rename aio_link aio_move aio_copy aio_group
                      aio_nop aio_mknod aio_load aio_rmtree aio_mkdir aio_chown
                      aio_chmod aio_utime aio_truncate
@@ -242,6 +242,8 @@ documentation.
    aio_copy $srcpath, $dstpath, $callback->($status)
    aio_move $srcpath, $dstpath, $callback->($status)
    aio_rmtree $pathname, $callback->($status)
+   aio_fcntl $fh, $cmd, $arg, $callback->($status)
+   aio_ioctl $fh, $request, $buf, $callback->($status)
    aio_sync $callback->($status)
    aio_syncfs $fh, $callback->($status)
    aio_fsync $fh, $callback->($status)
@@ -396,7 +398,7 @@ your system are, as usual, C<0>):
 
 C<O_ASYNC>, C<O_DIRECT>, C<O_NOATIME>, C<O_CLOEXEC>, C<O_NOCTTY>, C<O_NOFOLLOW>,
 C<O_NONBLOCK>, C<O_EXEC>, C<O_SEARCH>, C<O_DIRECTORY>, C<O_DSYNC>,
-C<O_RSYNC>, C<O_SYNC> and C<O_TTY_INIT>.
+C<O_RSYNC>, C<O_SYNC>, C<O_PATH>, C<O_TMPFILE>, and C<O_TTY_INIT>.
 
 
 =item aio_close $fh, $callback->($status)
@@ -628,8 +630,9 @@ Linux - it is safe to hardcode these when C<$^O> is C<linux>:
    0x0000f15f ecryptfs
    0x00414a53 efs
    0x0000137d ext
-   0x0000ef53 ext2/ext3
+   0x0000ef53 ext2/ext3/ext4
    0x0000ef51 ext2
+   0xf2f52010 f2fs
    0x00004006 fat
    0x65735546 fuseblk
    0x65735543 fusectl
@@ -638,6 +641,7 @@ Linux - it is safe to hardcode these when C<$^O> is C<linux>:
    0x47504653 gpfs
    0x00004244 hfs
    0xf995e849 hpfs
+   0x00c0ffee hostfs
    0x958458f6 hugetlbfs
    0x2bad1dea inotifyfs
    0x00009660 isofs
@@ -662,6 +666,7 @@ Linux - it is safe to hardcode these when C<$^O> is C<linux>:
    0x00009fa0 proc
    0x6165676c pstorefs
    0x0000002f qnx4
+   0x68191122 qnx6
    0x858458f6 ramfs
    0x52654973 reiserfs
    0x00007275 romfs
@@ -727,9 +732,13 @@ Works like truncate(2) or ftruncate(2).
 Allocates or frees disk space according to the C<$mode> argument. See the
 linux C<fallocate> documentation for details.
 
-C<$mode> can currently be C<0> or C<IO::AIO::FALLOC_FL_KEEP_SIZE>
-to allocate space, or C<IO::AIO::FALLOC_FL_PUNCH_HOLE |
-IO::AIO::FALLOC_FL_KEEP_SIZE>, to deallocate a file range.
+C<$mode> is usually C<0> or C<IO::AIO::FALLOC_FL_KEEP_SIZE> to allocate
+space, or C<IO::AIO::FALLOC_FL_PUNCH_HOLE | IO::AIO::FALLOC_FL_KEEP_SIZE>,
+to deallocate a file range.
+
+IO::AIO also supports C<FALLOC_FL_COLLAPSE_RANGE>, to remove a range
+(without leaving a hole) and C<FALLOC_FL_ZERO_RANGE>, to zero a range (see
+your L<fallocate(2)> manpage).
 
 The file system block size used by C<fallocate> is presumably the
 C<f_bsize> returned by C<statvfs>.
@@ -1221,6 +1230,25 @@ sub aio_rmtree($;$) {
 
    $grp
 }
+
+=item aio_fcntl $fh, $cmd, $arg, $callback->($status)
+
+=item aio_ioctl $fh, $request, $buf, $callback->($status)
+
+These work just like the C<fcntl> and C<ioctl> built-in functions, except
+they execute asynchronously and pass the return value to the callback.
+
+Both calls can be used for a lot of things, some of which make more sense
+to run asynchronously in their own thread, while some others make less
+sense. For example, calls that block waiting for external events, such
+as locking, will also lock down an I/O thread while it is waiting, which
+can deadlock the whole I/O system. At the same time, there might be no
+alternative to using a thread to wait.
+
+So in general, you should only use these calls for things that do
+(filesystem) I/O, not for things that wait for other events (network,
+other processes), although if you are careful and know what you are doing,
+you still can.
 
 =item aio_sync $callback->($status)
 
@@ -2055,13 +2083,20 @@ filesize.
 C<$prot> is a combination of C<IO::AIO::PROT_NONE>, C<IO::AIO::PROT_EXEC>,
 C<IO::AIO::PROT_READ> and/or C<IO::AIO::PROT_WRITE>,
 
-C<$flags> can be a combination of C<IO::AIO::MAP_SHARED> or
-C<IO::AIO::MAP_PRIVATE>, or a number of system-specific flags (when
-not available, the are defined as 0): C<IO::AIO::MAP_ANONYMOUS>
-(which is set to C<MAP_ANON> if your system only provides this
-constant), C<IO::AIO::MAP_HUGETLB>, C<IO::AIO::MAP_LOCKED>,
-C<IO::AIO::MAP_NORESERVE>, C<IO::AIO::MAP_POPULATE> or
-C<IO::AIO::MAP_NONBLOCK>
+C<$flags> can be a combination of
+C<IO::AIO::MAP_SHARED> or
+C<IO::AIO::MAP_PRIVATE>,
+or a number of system-specific flags (when not available, the are C<0>):
+C<IO::AIO::MAP_ANONYMOUS> (which is set to C<MAP_ANON> if your system only provides this constant),
+C<IO::AIO::MAP_LOCKED>,
+C<IO::AIO::MAP_NORESERVE>,
+C<IO::AIO::MAP_POPULATE>,
+C<IO::AIO::MAP_NONBLOCK>,
+C<IO::AIO::MAP_FIXED>,
+C<IO::AIO::MAP_GROWSDOWN>,
+C<IO::AIO::MAP_32BIT>,
+C<IO::AIO::MAP_HUGETLB> or
+C<IO::AIO::MAP_STACK>.
 
 If C<$fh> is C<undef>, then a file descriptor of C<-1> is passed.
 
@@ -2123,6 +2158,26 @@ Attempts to query or change the pipe buffer size. Obviously works only
 on pipes, and currently works only on GNU/Linux systems, and fails with
 C<-1>/C<ENOSYS> everywhere else. If anybody knows how to influence pipe buffer
 size on other systems, drop me a note.
+
+=item ($rfh, $wfh) = IO::AIO::pipe2 [$flags]
+
+This is a direct interface to the Linux L<pipe2(2)> system call. If
+C<$flags> is missing or C<0>, then this should be the same as a call to
+perl's built-in C<pipe> function and create a new pipe, and works on
+systems that lack the pipe2 syscall. On win32, this case invokes C<_pipe
+(..., 4096, O_BINARY)>.
+
+If C<$flags> is non-zero, it tries to invoke the pipe2 system call with
+the given flags (Linux 2.6.27, glibc 2.9).
+
+On success, the read and write file handles are returned.
+
+On error, nothing will be returned. If the pipe2 syscall is missing and
+C<$flags> is non-zero, fails with C<ENOSYS>.
+
+Please refer to L<pipe2(2)> for more info on the C<$flags>, but at the
+time of this writing, C<IO::AIO::O_CLOEXEC>, C<IO::AIO::O_NONBLOCK> and
+C<IO::AIO::O_DIRECT> (Linux 3.4, for packet-based pipes) were supported.
 
 =back
 
