@@ -978,9 +978,9 @@ sub changeEffectiveUserAndGroup {
 
 	# Don't allow the server to be started as root.
 	# MySQL can't be run as root, and it's generally a bad idea anyways.
-	# Try starting as 'squeezeboxserver' instead.
+	# Try starting as 'logitechmediaserver' instead.
 	if (!defined($user)) {
-		$user = 'squeezeboxserver';
+		$user = 'logitechmediaserver';
 		print STDERR "Logitech Media Server must not be run as root!  Trying user $user instead.\n";
 	}
 
