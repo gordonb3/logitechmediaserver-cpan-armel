@@ -1,14 +1,12 @@
 package HTTP::Headers::Auth;
 
 use strict;
-use warnings;
-
-our $VERSION = "6.11";
+use vars qw($VERSION);
+$VERSION = sprintf("%d.%02d", q$Revision: 1.4 $ =~ /(\d+)\.(\d+)/);
 
 use HTTP::Headers;
 
-package
-    HTTP::Headers;
+package HTTP::Headers;
 
 BEGIN {
     # we provide a new (and better) implementations below
@@ -24,13 +22,13 @@ sub _parse_authenticate
     for (HTTP::Headers::Util::split_header_words(@_)) {
 	if (!defined($_->[1])) {
 	    # this is a new auth scheme
-	    push(@ret, shift(@$_) => {});
+	    push(@ret, lc(shift @$_) => {});
 	    shift @$_;
 	}
 	if (@ret) {
 	    # this a new parameter pair for the last auth scheme
 	    while (@$_) {
-		my $k = shift @$_;
+		my $k = lc(shift @$_);
 		my $v = shift @$_;
 	        $ret[-1]{$k} = $v;
 	    }

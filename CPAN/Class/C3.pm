@@ -4,7 +4,7 @@ package Class::C3;
 use strict;
 use warnings;
 
-our $VERSION = '0.30';
+our $VERSION = '0.21';
 
 our $C3_IN_CORE;
 our $C3_XS;
@@ -14,26 +14,16 @@ BEGIN {
         $C3_IN_CORE = 1;
         require mro;
     }
-    elsif($C3_XS or not defined $C3_XS) {
-        my $error = do {
-            local $@;
-            eval { require Class::C3::XS };
-            $@;
-        };
-
-        if ($error) {
-            die $error if $error !~ /\blocate\b/;
-
-            if ($C3_XS) {
-                require Carp;
-                Carp::croak( "XS explicitly requested but Class::C3::XS is not available" );
-            }
-
-            require Algorithm::C3;
-            require Class::C3::next;
+    else {
+        eval "require Class::C3::XS";
+        my $error = $@;
+        if(!$error) {
+            $C3_XS = 1;
         }
         else {
-            $C3_XS = 1;
+            die $error if $error !~ /\blocate\b/;
+            require Algorithm::C3;
+            require Class::C3::next;
         }
     }
 }
@@ -44,7 +34,7 @@ BEGIN {
 # this:
 #
 #   $MRO{$class} = {
-#      MRO => [ <class precedence list> ],
+#      MRO => [ <class precendence list> ],
 #      methods => {
 #          orig => <original location of method>,
 #          code => \&<ref to original method>
@@ -137,7 +127,7 @@ sub _calculate_method_dispatch_table {
     my %methods;
     # NOTE:
     # we do @MRO[1 .. $#MRO] here because it
-    # makes no sense to interrogate the class
+    # makes no sense to interogate the class
     # which you are calculating for.
     foreach my $local (@MRO[1 .. $#MRO]) {
         # if overload has tagged this module to
@@ -146,7 +136,7 @@ sub _calculate_method_dispatch_table {
         $has_overload_fallback = ${"${local}::()"}
             if !defined $has_overload_fallback && defined ${"${local}::()"};
         foreach my $method (grep { defined &{"${local}::$_"} } keys %{"${local}::"}) {
-            # skip if already overridden in local class
+            # skip if already overriden in local class
             next unless !defined *{"${class}::$method"}{CODE};
             $methods{$method} = {
                 orig => "${local}::$method",
@@ -233,27 +223,26 @@ __END__
 
 =head1 NAME
 
-Class::C3 - A pragma to use the C3 method resolution order algorithm
+Class::C3 - A pragma to use the C3 method resolution order algortihm
 
 =head1 SYNOPSIS
 
-    # NOTE - DO NOT USE Class::C3 directly as a user, use MRO::Compat instead!
-    package ClassA;
+    package A;
     use Class::C3;
     sub hello { 'A::hello' }
 
-    package ClassB;
-    use base 'ClassA';
+    package B;
+    use base 'A';
     use Class::C3;
 
-    package ClassC;
-    use base 'ClassA';
+    package C;
+    use base 'A';
     use Class::C3;
 
     sub hello { 'C::hello' }
 
-    package ClassD;
-    use base ('ClassB', 'ClassC');
+    package D;
+    use base ('B', 'C');
     use Class::C3;
 
     # Classic Diamond MI pattern
@@ -269,35 +258,30 @@ Class::C3 - A pragma to use the C3 method resolution order algorithm
     # (formerly called in INIT)
     Class::C3::initialize();
 
-    print join ', ' => Class::C3::calculateMRO('ClassD'); # prints ClassD, ClassB, ClassC, ClassA
+    print join ', ' => Class::C3::calculateMRO('Diamond_D') # prints D, B, C, A
 
-    print ClassD->hello(); # prints 'C::hello' instead of the standard p5 'A::hello'
+    print D->hello() # prints 'C::hello' instead of the standard p5 'A::hello'
 
-    ClassD->can('hello')->();          # can() also works correctly
-    UNIVERSAL::can('ClassD', 'hello'); # as does UNIVERSAL::can()
+    D->can('hello')->();          # can() also works correctly
+    UNIVERSAL::can('D', 'hello'); # as does UNIVERSAL::can()
 
 =head1 DESCRIPTION
 
 This is pragma to change Perl 5's standard method resolution order from depth-first left-to-right
 (a.k.a - pre-order) to the more sophisticated C3 method resolution order.
 
-B<NOTE:> YOU SHOULD NOT USE THIS MODULE DIRECTLY - The feature provided
-is integrated into perl version >= 5.9.5, and you should use L<MRO::Compat>
-instead, which will use the core implementation in newer perls, but fallback
-to using this implementation on older perls.
-
 =head2 What is C3?
 
 C3 is the name of an algorithm which aims to provide a sane method resolution order under multiple
-inheritance. It was first introduced in the language Dylan (see links in the L<SEE ALSO> section),
-and then later adopted as the preferred MRO (Method Resolution Order) for the new-style classes in
+inheritence. It was first introduced in the langauge Dylan (see links in the L<SEE ALSO> section),
+and then later adopted as the prefered MRO (Method Resolution Order) for the new-style classes in
 Python 2.3. Most recently it has been adopted as the 'canonical' MRO for Perl 6 classes, and the
 default MRO for Parrot objects as well.
 
 =head2 How does C3 work.
 
-C3 works by always preserving local precedence ordering. This essentially means that no class will
-appear before any of its subclasses. Take the classic diamond inheritance pattern for instance:
+C3 works by always preserving local precendence ordering. This essentially means that no class will
+appear before any of it's subclasses. Take the classic diamond inheritence pattern for instance:
 
      <A>
     /   \
@@ -309,7 +293,7 @@ The standard Perl 5 MRO would be (D, B, A, C). The result being that B<A> appear
 though B<C> is the subclass of B<A>. The C3 MRO algorithm however, produces the following MRO
 (D, B, C, A), which does not have this same issue.
 
-This example is fairly trivial, for more complex examples and a deeper explanation, see the links in
+This example is fairly trival, for more complex examples and a deeper explaination, see the links in
 the L<SEE ALSO> section.
 
 =head2 How does this module work?
@@ -333,12 +317,12 @@ think that code looks much nicer like this:
   package MyClass;
   use c3;
 
-This is more clunky:
+The the more clunky:
 
   package MyClass;
   use Class::C3;
 
-But hey, it's your choice, that's why it is optional.
+But hey, it's your choice, thats why it is optional.
 
 =head1 FUNCTIONS
 
@@ -350,7 +334,7 @@ Given a C<$class> this will return an array of class names in the proper C3 meth
 
 =item B<initialize>
 
-This B<must be called> to initialize the C3 method dispatch tables, this module B<will not work> if
+This B<must be called> to initalize the C3 method dispatch tables, this module B<will not work> if
 you do not do this. It is advised to do this as soon as possible B<after> loading any classes which
 use C3. Here is a quick code example:
 
@@ -370,7 +354,7 @@ use C3. Here is a quick code example:
 This function used to be called automatically for you in the INIT phase of the perl compiler, but
 that lead to warnings if this module was required at runtime. After discussion with my user base
 (the L<DBIx::Class> folks), we decided that calling this in INIT was more of an annoyance than a
-convenience. I apologize to anyone this causes problems for (although I would be very surprised if I had
+convience. I apologize to anyone this causes problems for (although i would very suprised if I had
 any other users other than the L<DBIx::Class> folks). The simplest solution of course is to define
 your own INIT method which calls this function.
 
@@ -394,14 +378,14 @@ This is an alias for L</initialize> above.
 
 It is always useful to be able to re-dispatch your method call to the "next most applicable method". This
 module provides a pseudo package along the lines of C<SUPER::> or C<NEXT::> which will re-dispatch the
-method along the C3 linearization. This is best shown with an example.
+method along the C3 linearization. This is best show with an examples.
 
   # a classic diamond MI pattern ...
-  #    <A>
-  #   /   \
-  # <B>   <C>
-  #   \   /
-  #    <D>
+     <A>
+    /   \
+  <B>   <C>
+    \   /
+     <D>
 
   package A;
   use c3;
@@ -412,7 +396,7 @@ method along the C3 linearization. This is best shown with an example.
   use c3;
   sub foo { 'B::foo => ' . (shift)->next::method() }
 
-  package C;
+  package B;
   use base 'A';
   use c3;
   sub foo { 'C::foo => ' . (shift)->next::method() }
@@ -428,7 +412,7 @@ A few things to note. First, we do not require you to add on the method name to 
 call (this is unlike C<NEXT::> and C<SUPER::> which do require that). This helps to enforce the rule
 that you cannot dispatch to a method of a different name (this is how C<NEXT::> behaves as well).
 
-The next thing to keep in mind is that you will need to pass all arguments to C<next::method>.  It can
+The next thing to keep in mind is that you will need to pass all arguments to C<next::method> it can
 not automatically use the current C<@_>.
 
 If C<next::method> cannot find a next method to re-dispatch the call to, it will throw an exception.
@@ -455,22 +439,22 @@ But there are still caveats, so here goes ...
 
 =item Use of C<SUPER::>.
 
-The idea of C<SUPER::> under multiple inheritance is ambiguous, and generally not recommended anyway.
-However, its use in conjunction with this module is very much not recommended, and in fact very
+The idea of C<SUPER::> under multiple inheritence is ambigious, and generally not recomended anyway.
+However, it's use in conjuntion with this module is very much not recommended, and in fact very
 discouraged. The recommended approach is to instead use the supplied C<next::method> feature, see
-more details on its usage above.
+more details on it's usage above.
 
 =item Changing C<@ISA>.
 
 It is the author's opinion that changing C<@ISA> at runtime is pure insanity anyway. However, people
 do it, so I must caveat. Any changes to the C<@ISA> will not be reflected in the MRO calculated by this
-module, and therefore probably won't even show up. If you do this, you will need to call C<reinitialize>
-in order to recalculate B<all> method dispatch tables. See the C<reinitialize> documentation and an example
+module, and therefor probably won't even show up. If you do this, you will need to call C<reinitialize>
+in order to recalulate B<all> method dispatch tables. See the C<reinitialize> documentation and an example
 in F<t/20_reinitialize.t> for more information.
 
 =item Adding/deleting methods from class symbol tables.
 
-This module calculates the MRO for each requested class by interrogating the symbol tables of said classes.
+This module calculates the MRO for each requested class by interogatting the symbol tables of said classes.
 So any symbol table manipulation which takes place after our INIT phase is run will not be reflected in
 the calculated MRO. Just as with changing the C<@ISA>, you will need to call C<reinitialize> for any
 changes you make to take effect.
@@ -507,7 +491,7 @@ If your software is meant to work on earlier Perls, use L<Class::C3> as document
 
 =head1 Class::C3::XS
 
-This module will load L<Class::C3::XS> if it's installed and you are running on a Perl version older than 5.9.5.  The optional module will be automatically installed for you if a C compiler is available, as it results in significant performance improvements (but unlike the 5.9.5+ core support, it still has all of the same caveats as L<Class::C3>).
+This module will load L<Class::C3::XS> if it's installed and you are running on a Perl version older than 5.9.5.  Installing this is recommended when possible, as it results in significant performance improvements (but unlike the 5.9.5+ core support, it still has all of the same caveats as L<Class::C3>).
 
 =head1 CODE COVERAGE
 
@@ -519,7 +503,7 @@ L<Devel::Cover> was reporting 94.4% overall test coverage earlier in this module
 
 =over 4
 
-=item L<https://web.archive.org/web/20000817033012id_/http://www.webcom.com/haahr/dylan/linearization-oopsla96.html>
+=item L<http://www.webcom.com/haahr/dylan/linearization-oopsla96.html>
 
 =back
 

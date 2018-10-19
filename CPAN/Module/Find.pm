@@ -7,20 +7,15 @@ use warnings;
 use File::Spec;
 use File::Find;
 
-our $VERSION = '0.13';
+our $VERSION = '0.06';
 
 our $basedir = undef;
 our @results = ();
 our $prune = 0;
-our $followMode = 1;
 
 our @ISA = qw(Exporter);
 
 our @EXPORT = qw(findsubmod findallmod usesub useall setmoduledirs);
-
-our @EXPORT_OK = qw(followsymlinks ignoresymlinks);
-
-=encoding utf-8
 
 =head1 NAME
 
@@ -44,15 +39,6 @@ Module::Find - Find and use installed modules in a (sub)category
   
   # set your own search dirs (uses @INC otherwise)
   setmoduledirs(@INC, @plugindirs, $appdir);
-  
-  # not exported by default
-  use Module::Find qw(ignoresymlinks followsymlinks);
-  
-  # ignore symlinks
-  ignoresymlinks();
-  
-  # follow symlinks (default)
-  followsymlinks();
 
 =head1 DESCRIPTION
 
@@ -78,7 +64,7 @@ default behaviour.
 =cut
 
 sub setmoduledirs {
-    return @Module::Find::ModuleDirs = grep { defined } @_;
+    return @Module::Find::ModuleDirs = @_;
 }
 
 =item C<@found = findsubmod Module::Category>
@@ -115,8 +101,6 @@ Uses and returns modules found in the Module/Category subdirectories of your per
 installation. E.g. C<usesub CGI> will return C<CGI::Session>, but 
 not C<CGI::Session::File> .
 
-If any module dies during loading, usesub will also die at this point.
-
 =cut
 
 sub usesub(*) {
@@ -134,10 +118,9 @@ sub usesub(*) {
 
 =item C<@found = useall Module::Category>
 
-Uses and returns modules found in the Module/Category subdirectories of your perl installation. E.g. C<useall CGI> will return C<CGI::Session> and also 
+Uses and returns modules found in the Module/Category subdirectories of your perl 
+installation. E.g. C<useall CGI> will return C<CGI::Session> and also 
 C<CGI::Session::File> .
-
-If any module dies during loading, useall will also die at this point.
 
 =cut
 
@@ -180,10 +163,10 @@ sub _find(*) {
     my ($category) = @_;
     return undef unless defined $category;
 
-    my $dir = File::Spec->catdir(split(/::|'/, $category));
+    my $dir = File::Spec->catdir(split(/::/, $category));
 
     my @dirs;
-    if (@Module::Find::ModuleDirs) {
+    if (defined @Module::Find::ModuleDirs) {
         @dirs = map { File::Spec->catdir($_, $dir) }
             @Module::Find::ModuleDirs;
     } else {
@@ -195,8 +178,7 @@ sub _find(*) {
         	next unless -d $basedir;
     	
         find({wanted   => \&_wanted,
-              no_chdir => 1,
-              follow   => $followMode}, $basedir);
+              no_chdir => 1}, $basedir);
     }
 
     # filter duplicate modules
@@ -204,32 +186,7 @@ sub _find(*) {
     @results = grep { not $seen{$_}++ } @results;
 
     @results = map "$category\::$_", @results;
-
-    @results = map {
-         ($_ =~ m{^(\w+(?:(?:::|')\w+)*)$})[0] || die "$_ does not look like a package name"
-    } @results;
-
     return @results;
-}
-
-=item C<ignoresymlinks()>
-
-Do not follow symlinks. This function is not exported by default.
-
-=cut
-
-sub ignoresymlinks {
-    $followMode = 0;
-}
-
-=item C<followsymlinks()>
-
-Follow symlinks (default behaviour). This function is not exported by default.
-
-=cut
-
-sub followsymlinks {
-    $followMode = 1;
 }
 
 =back
@@ -268,56 +225,13 @@ Fixed issue with bugfix in PathTools-3.14.
 
 =item 0.06, 2008-01-26
 
-Module::Find now won't report duplicate modules several times anymore (thanks to Uwe VÃ¶lker for the report and the patch)
-
-=item 0.07, 2009-09-08
-
-Fixed RT#38302: Module::Find now follows symlinks by default (can be disabled).
-
-=item 0.08, 2009-09-08
-
-Fixed RT#49511: Removed Mac OS X extended attributes from distribution
-
-=item 0.09, 2010-02-26
-
-Fixed RT#38302: Fixed META.yml generation (thanks very much to cpanservice for the help).
-
-=item 0.10, 2010-02-26
-
-Fixed RT#55010: Removed Unicode BOM from Find.pm.
-
-=item 0.11, 2012-05-22
-
-Fixed RT#74251: defined(@array) is deprecated under Perl 5.15.7.
-Thanks to Roman F, who contributed the implementation.
-
-=item 0.12, 2014-02-08
-
-Fixed RT#81077: useall fails in taint mode
-Thanks to Aran Deltac, who contributed the implementation and test.
-
-Fixed RT#83596: Documentation doesn't describe behaviour if a module fails to load
-Clarified documentation for useall and usesub.
-
-Fixed RT#62923: setmoduledirs(undef) doesn't reset to searching @INC
-Added more explicit tests.
-Thanks to Colin Robertson for his input.
-
-=item 0.13, 2015-03-09
-
-This release contains two contributions from Moritz Lenz:
-- Link to Module::Pluggable and Class::Factory::Util in "SEE ALSO"
-- Align package name parsing with how perl does it (allowing single quotes as module separator)
+Module::Find now won't report duplicate modules several times anymore (thanks to Uwe Všlker for the report and the patch)
 
 =back
 
-=head1 DEVELOPMENT NOTES
-
-Please report any bugs using the CPAN RT system. The development repository for this module is hosted on GitHub: L<http://github.com/crenz/Module-Find/>.
-
 =head1 SEE ALSO
 
-L<perl>, L<Module::Pluggable>, L<Class::Factory::Util>
+L<perl>
 
 =head1 AUTHOR
 
@@ -325,7 +239,7 @@ Christian Renz, E<lt>crenz@web42.comE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 2004-2014 by Christian Renz <crenz@web42.com>. All rights reserved.
+Copyright 2004-2008 by Christian Renz <crenz@web42.com>. All rights reserved.
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself. 

@@ -1,14 +1,22 @@
 package Test::Builder::Module;
 
-use strict;
-
-use Test::Builder 0.99;
+use Test::Builder;
 
 require Exporter;
-our @ISA = qw(Exporter);
+@ISA = qw(Exporter);
 
-our $VERSION = '1.001002';
-$VERSION = eval $VERSION;      ## no critic (BuiltinFunctions::ProhibitStringyEval)
+$VERSION = '0.03';
+
+use strict;
+
+# 5.004's Exporter doesn't have export_to_level.
+my $_export_to_level = sub {
+      my $pkg = shift;
+      my $level = shift;
+      (undef) = shift;                  # redundant arg
+      my $callpkg = caller($level);
+      $pkg->export($callpkg, @_);
+};
 
 
 =head1 NAME
@@ -52,13 +60,13 @@ for you.
 =head3 import
 
 Test::Builder::Module provides an import() method which acts in the
-same basic way as Test::More's, setting the plan and controlling
+same basic way as Test::More's, setting the plan and controling
 exporting of functions and variables.  This allows your module to set
 the plan independent of Test::More.
 
 All arguments passed to import() are passed onto 
 C<< Your::Module->builder->plan() >> with the exception of 
-C<< import =>[qw(things to import)] >>.
+C<import =>[qw(things to import)]>.
 
     use Your::Module import => [qw(this that)], tests => 23;
 
@@ -76,22 +84,20 @@ import_extra().
 sub import {
     my($class) = shift;
 
-    # Don't run all this when loading ourself.
-    return 1 if $class eq 'Test::Builder::Module';
-
     my $test = $class->builder;
 
     my $caller = caller;
 
     $test->exported_to($caller);
 
-    $class->import_extra( \@_ );
-    my(@imports) = $class->_strip_imports( \@_ );
+    $class->import_extra(\@_);
+    my(@imports) = $class->_strip_imports(\@_);
 
     $test->plan(@_);
 
-    $class->export_to_level( 1, $class, @imports );
+    $class->$_export_to_level(1, $class, @imports);
 }
+
 
 sub _strip_imports {
     my $class = shift;
@@ -99,12 +105,12 @@ sub _strip_imports {
 
     my @imports = ();
     my @other   = ();
-    my $idx     = 0;
+    my $idx = 0;
     while( $idx <= $#{$list} ) {
         my $item = $list->[$idx];
 
         if( defined $item and $item eq 'import' ) {
-            push @imports, @{ $list->[ $idx + 1 ] };
+            push @imports, @{$list->[$idx+1]};
             $idx++;
         }
         else {
@@ -118,6 +124,7 @@ sub _strip_imports {
 
     return @imports;
 }
+
 
 =head3 import_extra
 
@@ -136,7 +143,8 @@ feels like a bit of an ugly hack in its current form.
 
 =cut
 
-sub import_extra { }
+sub import_extra {}
+
 
 =head2 Builder
 
@@ -169,5 +177,6 @@ call builder() inside each function rather than store it in a global.
 sub builder {
     return Test::Builder->new;
 }
+
 
 1;

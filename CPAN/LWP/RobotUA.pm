@@ -1,14 +1,17 @@
 package LWP::RobotUA;
 
+# $Id: RobotUA.pm 8931 2006-08-11 16:44:43Z dsully $
+
 require LWP::UserAgent;
 @ISA = qw(LWP::UserAgent);
-$VERSION = "6.15";
+$VERSION = sprintf("%d.%02d", q$Revision: 1.27 $ =~ /(\d+)\.(\d+)/);
 
 require WWW::RobotRules;
 require HTTP::Request;
 require HTTP::Response;
 
 use Carp ();
+use LWP::Debug ();
 use HTTP::Status ();
 use HTTP::Date qw(time2str);
 use strict;
@@ -47,8 +50,8 @@ sub new
     my $self = LWP::UserAgent->new(%cnf);
     $self = bless $self, $class;
 
-    $self->{'delay'} = $delay;   # minutes
-    $self->{'use_sleep'} = $use_sleep;
+    $self->{'delay'} = 1;   # minutes
+    $self->{'use_sleep'} = 1;
 
     if ($rules) {
 	$rules->agent($cnf{agent});
@@ -113,52 +116,65 @@ sub simple_request
 {
     my($self, $request, $arg, $size) = @_;
 
+    LWP::Debug::trace('()');
+
     # Do we try to access a new server?
-    my $allowed = $self->{'rules'}->allowed($request->uri);
+    my $allowed = $self->{'rules'}->allowed($request->url);
 
     if ($allowed < 0) {
-	# Host is not visited before, or robots.txt expired; fetch "robots.txt"
-	my $robot_url = $request->uri->clone;
+	LWP::Debug::debug("Host is not visited before, or robots.txt expired.");
+	# fetch "robots.txt"
+	my $robot_url = $request->url->clone;
 	$robot_url->path("robots.txt");
 	$robot_url->query(undef);
+	LWP::Debug::debug("Requesting $robot_url");
 
 	# make access to robot.txt legal since this will be a recursive call
 	$self->{'rules'}->parse($robot_url, ""); 
 
-	my $robot_req = HTTP::Request->new('GET', $robot_url);
-	my $parse_head = $self->parse_head(0);
+	my $robot_req = new HTTP::Request 'GET', $robot_url;
 	my $robot_res = $self->request($robot_req);
-	$self->parse_head($parse_head);
 	my $fresh_until = $robot_res->fresh_until;
-	my $content = "";
-	if ($robot_res->is_success && $robot_res->content_is_text) {
-	    $content = $robot_res->decoded_content;
-	    $content = "" unless $content && $content =~ /^\s*Disallow\s*:/mi;
+	if ($robot_res->is_success) {
+	    my $c = $robot_res->content;
+	    if ($robot_res->content_type =~ m,^text/, && $c =~ /^\s*Disallow\s*:/mi) {
+		LWP::Debug::debug("Parsing robot rules");
+		$self->{'rules'}->parse($robot_url, $c, $fresh_until);
+	    }
+	    else {
+		LWP::Debug::debug("Ignoring robots.txt");
+		$self->{'rules'}->parse($robot_url, "", $fresh_until);
+	    }
+
 	}
-	$self->{'rules'}->parse($robot_url, $content, $fresh_until);
+	else {
+	    LWP::Debug::debug("No robots.txt file found");
+	    $self->{'rules'}->parse($robot_url, "", $fresh_until);
+	}
 
 	# recalculate allowed...
-	$allowed = $self->{'rules'}->allowed($request->uri);
+	$allowed = $self->{'rules'}->allowed($request->url);
     }
 
     # Check rules
     unless ($allowed) {
-	my $res = HTTP::Response->new(
-	  &HTTP::Status::RC_FORBIDDEN, 'Forbidden by robots.txt');
+	my $res = new HTTP::Response
+	  &HTTP::Status::RC_FORBIDDEN, 'Forbidden by robots.txt';
 	$res->request( $request ); # bind it to that request
 	return $res;
     }
 
-    my $netloc = eval { local $SIG{__DIE__}; $request->uri->host_port; };
+    my $netloc = eval { local $SIG{__DIE__}; $request->url->host_port; };
     my $wait = $self->host_wait($netloc);
 
     if ($wait) {
+	LWP::Debug::debug("Must wait $wait seconds");
 	if ($self->{'use_sleep'}) {
 	    sleep($wait)
 	}
 	else {
-	    my $res = HTTP::Response->new(
-	      &HTTP::Status::RC_SERVICE_UNAVAILABLE, 'Please, slow down');
+	    my $res = new HTTP::Response
+	      &HTTP::Status::RC_SERVICE_UNAVAILABLE, 'Please, slow down';
 	    $res->header('Retry-After', time2str(time + $wait));
 	    $res->request( $request ); # bind it to that request
 	    return $res;
@@ -215,7 +231,7 @@ and they should not make requests too frequently.
 But before you consider writing a robot, take a look at
 <URL:http://www.robotstxt.org/>.
 
-When you use an I<LWP::RobotUA> object as your user agent, then you do not
+When you use a I<LWP::RobotUA> object as your user agent, then you do not
 really have to think about these things yourself; C<robots.txt> files
 are automatically consulted and obeyed, the server isn't queried
 too rapidly, and so on.  Just send requests
@@ -264,7 +280,7 @@ Get/set a value indicating whether the UA should sleep() if requests
 arrive too fast, defined as $ua->delay minutes not passed since
 last request to the given server.  The default is TRUE.  If this value is
 FALSE then an internal SERVICE_UNAVAILABLE response will be generated.
-It will have a Retry-After header that indicates when it is OK to
+It will have an Retry-After header that indicates when it is OK to
 send another request to this server.
 
 =item $ua->rules

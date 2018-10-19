@@ -1,7 +1,8 @@
-package HTTP::Date;
+package HTTP::Date;  # $Date: 2006-08-11 12:44:43 -0400 (Fri, 11 Aug 2006) $
 
-$VERSION = "6.02";
+$VERSION = sprintf("%d.%02d", q$Revision: 1.47 $ =~ /(\d+)\.(\d+)/);
 
+require 5.004;
 require Exporter;
 @ISA = qw(Exporter);
 @EXPORT = qw(time2str str2time);
@@ -106,7 +107,7 @@ sub parse_date ($)
 	    \s*
 	 ([-+]?\d{2,4}|(?![APap][Mm]\b)[A-Za-z]+)? # timezone
 	    \s*
-	 (?:\(\w+\)|\w{3,})?   # ASCII representation of timezone.
+	 (?:\(\w+\))?	       # ASCII representation of timezone in parens.
 	    \s*$
 	/x)
 
@@ -282,8 +283,8 @@ time2str() and str2time(), are exported by default.
 =item time2str( [$time] )
 
 The time2str() function converts a machine time (seconds since epoch)
-to a string.  If the function is called without an argument or with an
-undefined argument, it will use the current time.
+to a string.  If the function is called without an argument, it will
+use the current time.
 
 The string returned is in the format preferred for the HTTP protocol.
 This is a fixed length subset of the format defined by RFC 1123,
@@ -315,13 +316,13 @@ to get the date recognized.
 This function will try to parse a date string, and then return it as a
 list of numerical values followed by a (possible undefined) time zone
 specifier; ($year, $month, $day, $hour, $min, $sec, $tz).  The $year
-will be the full 4-digit year, and $month numbers start with 1 (for January).
+returned will B<not> have the number 1900 subtracted from it and the
+$month numbers start with 1.
 
 In scalar context the numbers are interpolated in a string of the
 "YYYY-MM-DD hh:mm:ss TZ"-format and returned.
 
-If the date is unrecognized, then the empty list is returned (C<undef> in
-scalar context).
+If the date is unrecognized, then the empty list is returned.
 
 The function is able to parse the following formats:
 

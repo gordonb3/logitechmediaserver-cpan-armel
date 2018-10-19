@@ -1,8 +1,12 @@
+# $Id: Negotiate.pm 8931 2006-08-11 16:44:43Z dsully $
+#
+
 package HTTP::Negotiate;
 
-$VERSION = "6.01";
+$VERSION = sprintf("%d.%02d", q$Revision: 1.16 $ =~ /(\d+)\.(\d+)/);
 sub Version { $VERSION; }
 
+require 5.002;
 require Exporter;
 @ISA = qw(Exporter);
 @EXPORT = qw(choose);
@@ -17,8 +21,8 @@ sub choose ($;$)
     my(%accept);
 
     unless (defined $request) {
-	# Create a request object from the CGI environment variables
-	$request = HTTP::Headers->new;
+	# Create a request object from the CGI envirionment variables
+	$request = new HTTP::Headers;
 	$request->header('Accept', $ENV{HTTP_ACCEPT})
 	  if $ENV{HTTP_ACCEPT};
 	$request->header('Accept-Charset', $ENV{HTTP_ACCEPT_CHARSET})
@@ -104,7 +108,7 @@ sub choose ($;$)
     }
 
     my @Q = ();  # This is where we collect the results of the
-		 # quality calculations
+		 # quality calcualtions
 
     # Calculate quality for all the variants that are available.
     for (@$variants) {
@@ -125,9 +129,9 @@ sub choose ($;$)
 
 	# Calculate encoding quality
 	my $qe = 1;
-	# If the variant has no assigned Content-Encoding, or if no
+	# If the variant has no assignes Content-Encoding, or if no
 	# Accept-Encoding field is present, then the value assigned
-	# is "qe=1".  If *all* of the variant's content encodings
+	# is "qe=1".  If *all* of the variant's content encoddings
 	# are listed in the Accept-Encoding field, then the value
 	# assigned is "qw=1".  If *any* of the variant's content
 	# encodings are not listed in the provided Accept-Encoding
@@ -149,7 +153,7 @@ sub choose ($;$)
 
 	# Calculate charset quality
 	my $qc  = 1;
-	# If the variant's media-type has no charset parameter,
+	# If the variant's media-type has not charset parameter,
 	# or the variant's charset is US-ASCII, or if no Accept-Charset
 	# field is present, then the value assigned is "qc=1".  If the
 	# variant's charset is listed in the Accept-Charset field,
@@ -166,7 +170,7 @@ sub choose ($;$)
 	    my @lang = ref($lang) ? @$lang : ($lang);
 	    # If any of the variant's content languages are listed
 	    # in the Accept-Language field, the the value assigned is
-	    # the largest of the "q" parameter values for those language
+	    # the maximus of the "q" paramet values for thos language
 	    # tags.
 	    my $q = undef;
 	    for (@lang) {
@@ -318,8 +322,8 @@ HTTP::Negotiate - choose a variant to serve
    ['var3',  0.3,   'image/gif',   undef,   undef,          undef, 43555],
   ];
 
- @preferred = choose($variants, $request_headers);
- $the_one   = choose($variants);
+ @prefered = choose($variants, $request_headers);
+ $the_one  = choose($variants);
 
 =head1 DESCRIPTION
 

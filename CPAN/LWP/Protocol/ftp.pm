@@ -1,7 +1,10 @@
-package LWP::Protocol::ftp;
+#
+# $Id: ftp.pm 8931 2006-08-11 16:44:43Z dsully $
 
 # Implementation of the ftp protocol (RFC 959). We let the Net::FTP
 # package do all the dirty work.
+
+package LWP::Protocol::ftp;
 
 use Carp ();
 
@@ -26,10 +29,12 @@ eval {
 
     sub new {
 	my $class = shift;
+	LWP::Debug::trace('()');
 
 	my $self = $class->SUPER::new(@_) || return undef;
 
 	my $mess = $self->message;  # welcome message
+	LWP::Debug::debug($mess);
 	$mess =~ s|\n.*||s; # only first line left
 	$mess =~ s|\s*ready\.?$||;
 	# Make the version number more HTTP like
@@ -55,6 +60,7 @@ eval {
     }
 
     sub go_home {
+	LWP::Debug::trace('');
 	my $self = shift;
 	$self->cwd(${*$self}{myftp_home});
     }
@@ -65,6 +71,7 @@ eval {
     }
 
     sub ping {
+	LWP::Debug::trace('');
 	my $self = shift;
 	return $self->go_home;
     }
@@ -83,6 +90,7 @@ sub _connect {
 	$key .= ":$account" if defined($account);
 	if (my $ftp = $conn_cache->withdraw("ftp", $key)) {
 	    if ($ftp->ping) {
+		LWP::Debug::debug('Reusing old connection');
 		# save it again
 		$conn_cache->deposit("ftp", $key, $ftp);
 		return $ftp;
@@ -94,7 +102,6 @@ sub _connect {
     my $ftp = LWP::Protocol::MyFTP->new($host,
 					Port => $port,
 					Timeout => $timeout,
-					LocalAddr => $self->{ua}{local_address},
 				       );
     # XXX Should be some what to pass on 'Passive' (header??)
     unless ($ftp) {
@@ -102,17 +109,21 @@ sub _connect {
 	return HTTP::Response->new(&HTTP::Status::RC_INTERNAL_SERVER_ERROR, $@);
     }
 
+    LWP::Debug::debug("Logging in as $user (password $password)...");
     unless ($ftp->login($user, $password, $account)) {
 	# Unauthorized.  Let's fake a RC_UNAUTHORIZED response
 	my $mess = scalar($ftp->message);
+	LWP::Debug::debug($mess);
 	$mess =~ s/\n$//;
 	my $res =  HTTP::Response->new(&HTTP::Status::RC_UNAUTHORIZED, $mess);
 	$res->header("Server", $ftp->http_server);
 	$res->header("WWW-Authenticate", qq(Basic Realm="FTP login"));
 	return $res;
     }
+    LWP::Debug::debug($ftp->message);
 
     my $home = $ftp->pwd;
+    LWP::Debug::debug("home: '$home'");
     $ftp->home($home);
 
     $conn_cache->deposit("ftp", $key, $ftp) if $conn_cache;
@@ -127,6 +138,8 @@ sub request
 
     $size = 4096 unless $size;
 
+    LWP::Debug::trace('()');
+
     # check proxy
     if (defined $proxy)
     {
@@ -134,7 +147,7 @@ sub request
 				   'You can not proxy through the ftp');
     }
 
-    my $url = $request->uri;
+    my $url = $request->url;
     if ($url->scheme ne 'ftp') {
 	my $scheme = $url->scheme;
 	return HTTP::Response->new(&HTTP::Status::RC_INTERNAL_SERVER_ERROR,
@@ -160,7 +173,7 @@ sub request
     my $user     = $url->user;
     my $password = $url->password;
 
-    # If a basic authorization header is present than we prefer these over
+    # If a basic autorization header is present than we prefer these over
     # the username/password specified in the URL.
     {
 	my($u,$p) = $request->authorization_basic;
@@ -204,6 +217,7 @@ sub request
     }
 
     for (@path) {
+	LWP::Debug::debug("CWD $_");
 	unless ($ftp->cwd($_)) {
 	    return HTTP::Response->new(&HTTP::Status::RC_NOT_FOUND,
 				       "Can't chdir to $_");
@@ -211,6 +225,7 @@ sub request
     }
 
     if ($method eq 'GET' || $method eq 'HEAD') {
+	LWP::Debug::debug("MDTM");
 	if (my $mod_time = $ftp->mdtm($remote_file)) {
 	    $response->last_modified($mod_time);
 	    if (my $ims = $request->if_modified_since) {
@@ -260,6 +275,7 @@ sub request
 	}
 
 	my $data;  # the data handle
+	LWP::Debug::debug("retrieve file?");
 	if (length($remote_file) and $data = $ftp->retr($remote_file)) {
 	    my($type, @enc) = LWP::MediaTypes::guess_media_type($remote_file);
 	    $response->header('Content-Type',   $type) if $type;
@@ -267,6 +283,7 @@ sub request
 		$response->push_header('Content-Encoding', $_);
 	    }
 	    my $mess = $ftp->message;
+	    LWP::Debug::debug($mess);
 	    if ($mess =~ /\((\d+)\s+bytes\)/) {
 		$response->header('Content-Length', "$1");
 	    }
@@ -322,11 +339,13 @@ sub request
 	elsif (!length($remote_file) || ( $ftp->code >= 400 && $ftp->code < 600 )) {
 	    # not a plain file, try to list instead
 	    if (length($remote_file) && !$ftp->cwd($remote_file)) {
+		LWP::Debug::debug("chdir before listing failed");
 		return HTTP::Response->new(&HTTP::Status::RC_NOT_FOUND,
 					   "File '$remote_file' not found");
 	    }
 
 	    # It should now be safe to try to list the directory
+	    LWP::Debug::debug("dir");
 	    my @lsl = $ftp->dir;
 
 	    # Try to figure out if the user want us to convert the
@@ -348,7 +367,7 @@ sub request
 	    elsif ($prefer eq 'html') {
 		$response->header('Content-Type' => 'text/html');
 		$content = "<HEAD><TITLE>File Listing</TITLE>\n";
-		my $base = $request->uri->clone;
+		my $base = $request->url->clone;
 		my $path = $base->path;
 		$base->path("$path/") unless $path =~ m|/$|;
 		$content .= qq(<BASE HREF="$base">\n</HEAD>\n);
@@ -388,6 +407,8 @@ sub request
 	}
 	my $data;
 	if ($data = $ftp->stor($remote_file)) {
+	    LWP::Debug::debug($ftp->message);
+	    LWP::Debug::debug("$data");
 	    my $content = $request->content;
 	    my $bytes = 0;
 	    if (defined $content) {
@@ -412,6 +433,7 @@ sub request
 		}
 	    }
 	    $data->close;
+	    LWP::Debug::debug($ftp->message);
 
 	    $response->code(&HTTP::Status::RC_CREATED);
 	    $response->header('Content-Type', 'text/plain');

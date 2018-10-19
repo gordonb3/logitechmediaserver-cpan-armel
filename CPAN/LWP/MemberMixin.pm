@@ -1,5 +1,7 @@
 package LWP::MemberMixin;
 
+# $Id: MemberMixin.pm 8931 2006-08-11 16:44:43Z dsully $
+
 sub _elem
 {
     my $self = shift;

@@ -1,11 +1,13 @@
 package HTTP::Daemon;
 
+# $Id: Daemon.pm 8931 2006-08-11 16:44:43Z dsully $
+
 use strict;
 use vars qw($VERSION @ISA $PROTO $DEBUG);
 
-$VERSION = "6.01";
+$VERSION = sprintf("%d.%02d", q$Revision: 1.36 $ =~ /(\d+)\.(\d+)/);
 
-use IO::Socket qw(AF_INET INADDR_ANY INADDR_LOOPBACK inet_ntoa);
+use IO::Socket qw(AF_INET INADDR_ANY inet_ntoa);
 @ISA=qw(IO::Socket::INET);
 
 $PROTO = "HTTP/1.1";
@@ -43,9 +45,6 @@ sub url
     if (!$addr || $addr eq INADDR_ANY) {
  	require Sys::Hostname;
  	$url .= lc Sys::Hostname::hostname();
-    }
-    elsif ($addr eq INADDR_LOOPBACK) {
-	$url .= inet_ntoa($addr);
     }
     else {
 	$url .= gethostbyaddr($addr, AF_INET) || inet_ntoa($addr);
@@ -151,7 +150,6 @@ sub get_request
     my $r = HTTP::Request->new($method, $uri);
     $r->protocol($proto);
     ${*$self}{'httpd_client_proto'} = $proto = _http_version($proto);
-    ${*$self}{'httpd_head'} = ($method eq "HEAD");
 
     if ($proto >= $HTTP_1_0) {
 	# we expect to find some headers
@@ -192,19 +190,6 @@ sub get_request
     my $te  = $r->header('Transfer-Encoding');
     my $ct  = $r->header('Content-Type');
     my $len = $r->header('Content-Length');
-
-    # Act on the Expect header, if it's there
-    for my $e ( $r->header('Expect') ) {
-        if( lc($e) eq '100-continue' ) {
-            $self->send_status_line(100);
-            $self->send_crlf;
-        }
-        else {
-            $self->send_error(417);
-            $self->reason("Unsupported Expect header value");
-            return;
-        }
-    }
 
     if ($te && lc($te) eq 'chunked') {
 	# Handle chunked transfer encoding
@@ -281,6 +266,21 @@ sub get_request
 	return;
 
     }
+    elsif ($ct && lc($ct) =~ m/^multipart\/\w+\s*;.*boundary\s*=\s*(\w+)/) {
+	# Handle multipart content type
+	my $boundary = "$CRLF--$1--$CRLF";
+	my $index;
+	while (1) {
+	    $index = index($buf, $boundary);
+	    last if $index >= 0;
+	    # end marker not yet found
+	    return unless $self->_need_more($buf, $timeout, $fdset);
+	}
+	$index += length($boundary);
+	$r->content(substr($buf, 0, $index));
+	substr($buf, 0, $index) = '';
+
+    }
     elsif ($len) {
 	# Plain body specified by "Content-Length"
 	my $missing = $len - length($buf);
@@ -298,21 +298,6 @@ sub get_request
 	    $r->content($buf);
 	    $buf='';
 	}
-    }
-    elsif ($ct && $ct =~ m/^multipart\/\w+\s*;.*boundary\s*=\s*("?)(\w+)\1/i) {
-	# Handle multipart content type
-	my $boundary = "$CRLF--$2--";
-	my $index;
-	while (1) {
-	    $index = index($buf, $boundary);
-	    last if $index >= 0;
-	    # end marker not yet found
-	    return unless $self->_need_more($buf, $timeout, $fdset);
-	}
-	$index += length($boundary);
-	$r->content(substr($buf, 0, $index));
-	substr($buf, 0, $index) = '';
-
     }
     ${*$self}{'httpd_rbuf'} = $buf;
 
@@ -390,12 +375,6 @@ sub force_last_request
     ${*$self}{'httpd_nomore'}++;
 }
 
-sub head_request
-{
-    my $self = shift;
-    ${*$self}{'httpd_head'};
-}
-
 
 sub send_status_line
 {
@@ -423,17 +402,6 @@ sub send_basic_header
     print $self "Date: ", time2str(time), $CRLF;
     my $product = $self->daemon->product_tokens;
     print $self "Server: $product$CRLF" if $product;
-}
-
-
-sub send_header
-{
-    my $self = shift;
-    while (@_) {
-	my($k, $v) = splice(@_, 0, 2);
-	$v = "" unless defined($v);
-	print $self "$k: $v$CRLF";
-    }
 }
 
 
@@ -472,15 +440,11 @@ sub send_response
 	}
 	else {
 	    $self->force_last_request;
-            $res->header('connection','close'); 
 	}
 	print $self $res->headers_as_string($CRLF);
 	print $self $CRLF;  # separates headers and content
     }
-    if ($self->head_request) {
-	# no content
-    }
-    elsif (ref($content) eq "CODE") {
+    if (ref($content) eq "CODE") {
 	while (1) {
 	    my $chunk = &$content();
 	    last unless defined($chunk) && length($chunk);
@@ -514,7 +478,7 @@ sub send_redirect
 	print $self "Content-Type: $ct$CRLF";
     }
     print $self $CRLF;
-    print $self $content if $content && !$self->head_request;
+    print $self $content if $content;
     $self->force_last_request;  # no use keeping the connection open
 }
 
@@ -537,7 +501,7 @@ EOT
 	print $self "Content-Length: " . length($mess) . $CRLF;
         print $self $CRLF;
     }
-    print $self $mess unless $self->head_request;
+    print $self $mess;
     $status;
 }
 
@@ -564,7 +528,7 @@ sub send_file_response
 	    print $self "Last-Modified: ", time2str($mtime), "$CRLF" if $mtime;
 	    print $self $CRLF;
 	}
-	$self->send_file(\*F) unless $self->head_request;
+	$self->send_file(\*F);
 	return RC_OK;
     }
     else {
@@ -629,7 +593,7 @@ HTTP::Daemon - a simple http server class
   print "Please contact me at: <URL:", $d->url, ">\n";
   while (my $c = $d->accept) {
       while (my $r = $c->get_request) {
-	  if ($r->method eq 'GET' and $r->uri->path eq "/xyzzy") {
+	  if ($r->method eq 'GET' and $r->url->path eq "/xyzzy") {
               # remember, this is *not* recommended practice :-)
 	      $c->send_file_response("/etc/passwd");
 	  }
@@ -731,7 +695,7 @@ of C<HTTP::Daemon>.  The following methods are provided:
 
 =item $c->get_request( $headers_only )
 
-This method reads data from the client and turns it into an
+This method read data from the client and turns it into an
 C<HTTP::Request> object which is returned.  It returns C<undef>
 if reading fails.  If it fails, then the C<HTTP::Daemon::ClientConn>
 object ($c) should be discarded, and you should not try call this
@@ -764,7 +728,7 @@ empty this buffer before you read more and you need to place
 unconsumed bytes here.  You also need this buffer if you implement
 services like I<101 Switching Protocols>.
 
-This method always returns the old buffer content and can optionally
+This method always return the old buffer content and can optionally
 replace the buffer content if you pass it an argument.
 
 =item $c->reason
@@ -783,11 +747,6 @@ string like "HTTP/1.1" or just "1.1".
 Return TRUE if the client speaks the HTTP/0.9 protocol.  No status
 code and no headers should be returned to such a client.  This should
 be the same as !$c->proto_ge("HTTP/1.0").
-
-=item $c->head_request
-
-Return TRUE if the last request was a C<HEAD> request.  No content
-body must be generated for these requests.
 
 =item $c->force_last_request
 
@@ -831,12 +790,6 @@ with an empty CRLF line.
 
 See the description of send_status_line() for the description of the
 accepted arguments.
-
-=item $c->send_header( $field, $value )
-
-=item $c->send_header( $field1, $value1, $field2, $value2, ... )
-
-Send one or more header lines.
 
 =item $c->send_response( $res )
 

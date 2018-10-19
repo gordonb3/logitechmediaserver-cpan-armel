@@ -4,8 +4,8 @@ use strict;
 use vars qw(@ISA $VERSION);
 require File::Spec::Unix;
 
-$VERSION = '3.48_01';
-$VERSION =~ tr/_//;
+$VERSION = '3.30';
+$VERSION = eval $VERSION;
 
 @ISA = qw(File::Spec::Unix);
 
@@ -156,16 +156,13 @@ their Unix counterparts:
  Unix:
     Unix->catdir("","")                 =  "/"
     Unix->catdir("",".")                =  "/"
-    Unix->catdir("","..")               =  "/"        # can't go
-                                                      # beyond root
+    Unix->catdir("","..")               =  "/"              # can't go beyond root
     Unix->catdir("",".","..","..","a")  =  "/a"
  Mac:
-    Mac->catdir("","")                  =  rootdir()  # (e.g. "HD:")
+    Mac->catdir("","")                  =  rootdir()         # (e.g. "HD:")
     Mac->catdir("",":")                 =  rootdir()
-    Mac->catdir("","::")                =  rootdir()  # can't go
-                                                      # beyond root
-    Mac->catdir("",":","::","::","a")   =  rootdir() . "a:"
-                                                    # (e.g. "HD:a:")
+    Mac->catdir("","::")                =  rootdir()         # can't go beyond root
+    Mac->catdir("",":","::","::","a")   =  rootdir() . "a:"  # (e.g. "HD:a:")
 
 However, this approach is limited to the first arguments following
 "root" (again, see C<Unix-E<gt>canonpath()> ). If there are more
@@ -374,10 +371,10 @@ directory on your startup volume.
 
 =cut
 
+my $tmpdir;
 sub tmpdir {
-    my $cached = $_[0]->_cached_tmpdir('TMPDIR');
-    return $cached if defined $cached;
-    $_[0]->_cache_tmpdir($_[0]->_tmpdir( $ENV{TMPDIR} ), 'TMPDIR');
+    return $tmpdir if defined $tmpdir;
+    $tmpdir = $_[0]->_tmpdir( $ENV{TMPDIR} );
 }
 
 =item updir
@@ -403,11 +400,10 @@ the filename '' is always considered to be absolute. Note that with version
 
 E.g.
 
-    File::Spec->file_name_is_absolute("a");         # false (relative)
-    File::Spec->file_name_is_absolute(":a:b:");     # false (relative)
-    File::Spec->file_name_is_absolute("MacintoshHD:");
-                                                    # true (absolute)
-    File::Spec->file_name_is_absolute("");          # true (absolute)
+    File::Spec->file_name_is_absolute("a");             # false (relative)
+    File::Spec->file_name_is_absolute(":a:b:");         # false (relative)
+    File::Spec->file_name_is_absolute("MacintoshHD:");  # true (absolute)
+    File::Spec->file_name_is_absolute("");              # true (absolute)
 
 
 =cut
@@ -444,8 +440,7 @@ sub path {
 =item splitpath
 
     ($volume,$directories,$file) = File::Spec->splitpath( $path );
-    ($volume,$directories,$file) = File::Spec->splitpath( $path,
-                                                          $no_file );
+    ($volume,$directories,$file) = File::Spec->splitpath( $path, $no_file );
 
 Splits a path into volume, directory, and filename portions.
 
@@ -745,7 +740,7 @@ sub rel2abs {
 
 	# Split up paths
 
-	# ignore $path's volume
+	# igonore $path's volume
         my ( $path_dirs, $path_file ) = ($self->splitpath($path))[1,2] ;
 
         # ignore $base's file part

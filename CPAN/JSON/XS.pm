@@ -42,8 +42,8 @@ JSON::XS are installed, then JSON will fall back on JSON::XS (this can be
 overridden) with no overhead due to emulation (by inheriting constructor
 and methods). If JSON::XS is not available, it will fall back to the
 compatible JSON::PP module as backend, so using JSON instead of JSON::XS
-gives you a portable JSON API that can be fast when you need and doesn't
-require a C compiler when that is a problem.
+gives you a portable JSON API that can be fast when you need it and
+doesn't require a C compiler when that is a problem.
 
 As this is the n-th-something JSON module on CPAN, what was the reason
 to write yet another JSON module? While it seems there are many JSON
@@ -103,7 +103,7 @@ package JSON::XS;
 
 use common::sense;
 
-our $VERSION = 3.01;
+our $VERSION = 3.04;
 our @ISA = qw(Exporter);
 
 our @EXPORT = qw(encode_json decode_json);
@@ -406,6 +406,16 @@ character, after which more white-space and comments are allowed.
         # neither this one...
   ]
 
+=item * literal ASCII TAB characters in strings
+
+Literal ASCII TAB characters are now allowed in strings (and treated as
+C<\t>).
+
+  [
+     "Hello\tWorld",
+     "Hello<TAB>World", # literal <TAB> would not normally be allowed
+  ]
+
 =back
 
 =item $json = $json->canonical ([$enable])
@@ -689,7 +699,7 @@ This is useful if your JSON texts are not delimited by an outer protocol
 and you need to know where the JSON text ends.
 
    JSON::XS->new->decode_prefix ("[1] the tail")
-   => ([], 3)
+   => ([1], 3)
 
 =back
 
@@ -740,11 +750,11 @@ using the method.
 
 And finally, in list context, it will try to extract as many objects
 from the stream as it can find and return them, or the empty list
-otherwise. For this to work, there must be no separators between the JSON
-objects or arrays, instead they must be concatenated back-to-back. If
-an error occurs, an exception will be raised as in the scalar context
-case. Note that in this case, any previously-parsed JSON texts will be
-lost.
+otherwise. For this to work, there must be no separators (other than
+whitespace) between the JSON objects or arrays, instead they must be
+concatenated back-to-back. If an error occurs, an exception will be
+raised as in the scalar context case. Note that in this case, any
+previously-parsed JSON texts will be lost.
 
 Example: Parse some JSON arrays/objects in a given string and return
 them.
@@ -760,6 +770,10 @@ all other circumstances you must not call this function (I mean it.
 although in simple tests it might actually work, it I<will> fail under
 real world conditions). As a special exception, you can also call this
 method before having parsed anything.
+
+That means you can only use this function to look at or manipulate text
+before or after complete JSON objects, not while the parser is in the
+middle of parsing a JSON object.
 
 This function is useful in two cases: a) finding the trailing text after a
 JSON object or b) parsing multiple JSON objects separated by non-JSON text
@@ -1555,22 +1569,140 @@ it, as major browser developers care only for features, not about getting
 security right).
 
 
+=head1 "OLD" VS. "NEW" JSON (RFC 4627 VS. RFC 7159)
+
+TL;DR: Due to security concerns, JSON::XS will not allow scalar data in
+JSON texts by default - you need to create your own JSON::XS object and
+enable C<allow_nonref>:
+
+
+   my $json = JSON::XS->new->allow_nonref;
+
+   $text = $json->encode ($data);
+   $data = $json->decode ($text);
+
+The long version: JSON being an important and supposedly stable format,
+the IETF standardised it as RFC 4627 in 2006. Unfortunately, the inventor
+of JSON, Dougles Crockford, unilaterally changed the definition of JSON in
+javascript. Rather than create a fork, the IETF decided to standardise the
+new syntax (apparently, so Iw as told, without finding it very amusing).
+
+The biggest difference between thed original JSON and the new JSON is that
+the new JSON supports scalars (anything other than arrays and objects) at
+the toplevel of a JSON text. While this is strictly backwards compatible
+to older versions, it breaks a number of protocols that relied on sending
+JSON back-to-back, and is a minor security concern.
+
+For example, imagine you have two banks communicating, and on one side,
+trhe JSON coder gets upgraded. Two messages, such as C<10> and C<1000>
+might then be confused to mean C<101000>, something that couldn't happen
+in the original JSON, because niether of these messages would be valid
+JSON.
+
+If one side accepts these messages, then an upgrade in the coder on either
+side could result in this becoming exploitable.
+
+This module has always allowed these messages as an optional extension, by
+default disabled. The security concerns are the reason why the default is
+still disabled, but future versions might/will likely upgrade to the newer
+RFC as default format, so you are advised to check your implementation
+and/or override the default with C<< ->allow_nonref (0) >> to ensure that
+future versions are safe.
+
+
 =head1 INTEROPERABILITY WITH OTHER MODULES
 
 C<JSON::XS> uses the L<Types::Serialiser> module to provide boolean
 constants. That means that the JSON true and false values will be
-comaptible to true and false values of iother modules that do the same,
+comaptible to true and false values of other modules that do the same,
 such as L<JSON::PP> and L<CBOR::XS>.
 
 
-=head1 THREADS
+=head1 INTEROPERABILITY WITH OTHER JSON DECODERS
 
-This module is I<not> guaranteed to be thread safe and there are no
-plans to change this until Perl gets thread support (as opposed to the
-horribly slow so-called "threads" which are simply slow and bloated
-process simulations - use fork, it's I<much> faster, cheaper, better).
+As long as you only serialise data that can be directly expressed in JSON,
+C<JSON::XS> is incapable of generating invalid JSON output (modulo bugs,
+but C<JSON::XS> has found more bugs in the official JSON testsuite (1)
+than the official JSON testsuite has found in C<JSON::XS> (0)).
 
-(It might actually work, but you have been warned).
+When you have trouble decoding JSON generated by this module using other
+decoders, then it is very likely that you have an encoding mismatch or the
+other decoder is broken.
+
+When decoding, C<JSON::XS> is strict by default and will likely catch all
+errors. There are currently two settings that change this: C<relaxed>
+makes C<JSON::XS> accept (but not generate) some non-standard extensions,
+and C<allow_tags> will allow you to encode and decode Perl objects, at the
+cost of not outputting valid JSON anymore.
+
+=head2 TAGGED VALUE SYNTAX AND STANDARD JSON EN/DECODERS
+
+When you use C<allow_tags> to use the extended (and also nonstandard and
+invalid) JSON syntax for serialised objects, and you still want to decode
+the generated When you want to serialise objects, you can run a regex
+to replace the tagged syntax by standard JSON arrays (it only works for
+"normal" package names without comma, newlines or single colons). First,
+the readable Perl version:
+
+   # if your FREEZE methods return no values, you need this replace first:
+   $json =~ s/\( \s* (" (?: [^\\":,]+|\\.|::)* ") \s* \) \s* \[\s*\]/[$1]/gx;
+
+   # this works for non-empty constructor arg lists:
+   $json =~ s/\( \s* (" (?: [^\\":,]+|\\.|::)* ") \s* \) \s* \[/[$1,/gx;
+
+And here is a less readable version that is easy to adapt to other
+languages:
+
+   $json =~ s/\(\s*("([^\\":,]+|\\.|::)*")\s*\)\s*\[/[$1,/g;
+
+Here is an ECMAScript version (same regex):
+
+   json = json.replace (/\(\s*("([^\\":,]+|\\.|::)*")\s*\)\s*\[/g, "[$1,");
+
+Since this syntax converts to standard JSON arrays, it might be hard to
+distinguish serialised objects from normal arrays. You can prepend a
+"magic number" as first array element to reduce chances of a collision:
+
+   $json =~ s/\(\s*("([^\\":,]+|\\.|::)*")\s*\)\s*\[/["XU1peReLzT4ggEllLanBYq4G9VzliwKF",$1,/g;
+
+And after decoding the JSON text, you could walk the data
+structure looking for arrays with a first element of
+C<XU1peReLzT4ggEllLanBYq4G9VzliwKF>.
+
+The same approach can be used to create the tagged format with another
+encoder. First, you create an array with the magic string as first member,
+the classname as second, and constructor arguments last, encode it as part
+of your JSON structure, and then:
+
+   $json =~ s/\[\s*"XU1peReLzT4ggEllLanBYq4G9VzliwKF"\s*,\s*("([^\\":,]+|\\.|::)*")\s*,/($1)[/g;
+
+Again, this has some limitations - the magic string must not be encoded
+with character escapes, and the constructor arguments must be non-empty.
+
+
+=head1 RFC7159
+
+Since this module was written, Google has written a new JSON RFC, RFC 7159
+(and RFC7158). Unfortunately, this RFC breaks compatibility with both the
+original JSON specification on www.json.org and RFC4627.
+
+As far as I can see, you can get partial compatibility when parsing by
+using C<< ->allow_nonref >>. However, consider the security implications
+of doing so.
+
+I haven't decided yet when to break compatibility with RFC4627 by default
+(and potentially leave applications insecure) and change the default to
+follow RFC7159, but application authors are well advised to call C<<
+->allow_nonref(0) >> even if this is the current default, if they cannot
+handle non-reference values, in preparation for the day when the default
+will change.
+
+
+=head1 (I-)THREADS
+
+This module is I<not> guaranteed to be ithread (or MULTIPLICITY-) safe
+and there are no plans to change this. Note that perl's builtin so-called
+theeads/ithreads are officially deprecated and should not be used.
 
 
 =head1 THE PERILS OF SETLOCALE

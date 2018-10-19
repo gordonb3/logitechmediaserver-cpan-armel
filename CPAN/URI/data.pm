@@ -55,8 +55,7 @@ sub data
 	$self->opaque("$enc,$new");
     }
     return unless defined wantarray;
-    $data = uri_unescape($data);
-    return $base64 ? decode_base64($data) : $data;
+    return $base64 ? decode_base64($data) : uri_unescape($data);
 }
 
 # I could not find a better way to interpolate the tr/// chars from

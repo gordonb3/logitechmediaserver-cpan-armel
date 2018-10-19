@@ -1,10 +1,8 @@
 package Test::Builder::Tester::Color;
 
 use strict;
-our $VERSION = "1.23_002";
 
 require Test::Builder::Tester;
-
 
 =head1 NAME
 
@@ -27,7 +25,8 @@ from the command line.
 
 =cut
 
-sub import {
+sub import
+{
     Test::Builder::Tester::color(1);
 }
 

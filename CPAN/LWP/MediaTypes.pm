@@ -1,11 +1,14 @@
 package LWP::MediaTypes;
 
+# $Id: MediaTypes.pm 8931 2006-08-11 16:44:43Z dsully $
+
 require Exporter;
 @ISA = qw(Exporter);
 @EXPORT = qw(guess_media_type media_suffix);
 @EXPORT_OK = qw(add_type add_encoding read_media_types);
-$VERSION = "6.02";
+$VERSION = sprintf("%d.%02d", q$Revision: 1.32 $ =~ /(\d+)\.(\d+)/);
 
+require LWP::Debug;
 use strict;
 
 # note: These hashes will also be filled with the entries found in
@@ -16,7 +19,6 @@ my %suffixType = (
     'html'  => 'text/html',
     'gif'   => 'image/gif',
     'jpg'   => 'image/jpeg',
-    'xml'   => 'text/xml',
 );
 
 my %suffixExt = (
@@ -24,7 +26,6 @@ my %suffixExt = (
     'text/html'  => 'html',
     'image/gif'  => 'gif',
     'image/jpeg' => 'jpg',
-    'text/xml'   => 'xml',
 );
 
 #XXX: there should be some way to define this in the media.types files.
@@ -39,6 +40,13 @@ my %suffixEncoding = (
 
 read_media_types();
 
+
+
+sub _dump {
+    require Data::Dumper;
+    Data::Dumper->new([\%suffixType, \%suffixExt, \%suffixEncoding],
+		      [qw(*suffixType *suffixExt *suffixEncoding)])->Dump;
+}
 
 
 sub guess_media_type
@@ -103,20 +111,19 @@ sub guess_media_type
 
 sub media_suffix {
     if (!wantarray && @_ == 1 && $_[0] !~ /\*/) {
-	return $suffixExt{lc $_[0]};
+	return $suffixExt{$_[0]};
     }
     my(@type) = @_;
     my(@suffix, $ext, $type);
     foreach (@type) {
 	if (s/\*/.*/) {
 	    while(($ext,$type) = each(%suffixType)) {
-		push(@suffix, $ext) if $type =~ /^$_$/i;
+		push(@suffix, $ext) if $type =~ /^$_$/;
 	    }
 	}
 	else {
-	    my $ltype = lc $_;
 	    while(($ext,$type) = each(%suffixType)) {
-		push(@suffix, $ext) if lc $type eq $ltype;
+		push(@suffix, $ext) if $type eq $_;
 	    }
 	}
     }
@@ -140,7 +147,7 @@ sub add_type
 	$ext =~ s/^\.//;
 	$suffixType{$ext} = $type;
     }
-    $suffixExt{lc $type} = $exts[0] if @exts;
+    $suffixExt{$type} = $exts[0] if @exts;
 }
 
 
@@ -161,18 +168,30 @@ sub read_media_types
     local($/, $_) = ("\n", undef);  # ensure correct $INPUT_RECORD_SEPARATOR
 
     my @priv_files = ();
-    push(@priv_files, "$ENV{HOME}/.media.types", "$ENV{HOME}/.mime.types")
-	if defined $ENV{HOME};  # Some doesn't have a home (for instance Win32)
+    if($^O eq "MacOS") {
+	push(@priv_files, "$ENV{HOME}:media.types", "$ENV{HOME}:mime.types")
+	    if defined $ENV{HOME};  # Some does not have a home (for instance Win32)
+    }
+    else {
+	push(@priv_files, "$ENV{HOME}/.media.types", "$ENV{HOME}/.mime.types")
+	    if defined $ENV{HOME};  # Some doesn't have a home (for instance Win32)
+    }
 
     # Try to locate "media.types" file, and initialize %suffixType from it
     my $typefile;
     unless (@files) {
-	@files = map {"$_/LWP/media.types"} @INC;
+	if($^O eq "MacOS") {
+	    @files = map {$_."LWP:media.types"} @INC;
+	}
+	else {
+	    @files = map {"$_/LWP/media.types"} @INC;
+	}
 	push @files, @priv_files;
     }
     for $typefile (@files) {
 	local(*TYPE);
 	open(TYPE, $typefile) || next;
+        LWP::Debug::debug("Reading media types from $typefile");
 	while (<TYPE>) {
 	    next if /^\s*#/; # comment line
 	    next if /^\s*$/; # blank line

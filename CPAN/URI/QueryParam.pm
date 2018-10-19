@@ -8,30 +8,38 @@ sub URI::_query::query_param {
 
     if (@_ == 0) {
 	# get keys
-	my (%seen, $i);
-	return grep !($i++ % 2 || $seen{$_}++), @old;
+	my %seen;
+	my @keys;
+	for (my $i = 0; $i < @old; $i += 2) {
+	    push(@keys, $old[$i]) unless $seen{$old[$i]}++;
+	}
+	return @keys;
     }
 
     my $key = shift;
-    my @i = grep $_ % 2 == 0 && $old[$_] eq $key, 0 .. $#old;
+    my @i;
+
+    for (my $i = 0; $i < @old; $i += 2) {
+	push(@i, $i) if $old[$i] eq $key;
+    }
 
     if (@_) {
 	my @new = @old;
 	my @new_i = @i;
 	my @vals = map { ref($_) eq 'ARRAY' ? @$_ : $_ } @_;
-
+	#print "VALS:@vals [@i]\n";
 	while (@new_i > @vals) {
-	    splice @new, pop @new_i, 2;
+	    #print "REMOVE $new_i[-1]\n";
+	    splice(@new, pop(@new_i), 2);
 	}
-	if (@vals > @new_i) {
+	while (@vals > @new_i) {
 	    my $i = @new_i ? $new_i[-1] + 2 : @new;
-	    my @splice = splice @vals, @new_i, @vals - @new_i;
-
-	    splice @new, $i, 0, map { $key => $_ } @splice;
+	    #print "SPLICE $i\n";
+	    splice(@new, $i, 0, $key => pop(@vals));
 	}
-	if (@vals) {
+	for (@vals) {
 	    #print "SET $new_i[0]\n";
-	    @new[ map $_ + 1, @new_i ] = @vals;
+	    $new[shift(@new_i)+1] = $_;
 	}
 
 	$self->query_form(\@new);
@@ -43,8 +51,7 @@ sub URI::_query::query_param {
 sub URI::_query::query_param_append {
     my $self = shift;
     my $key = shift;
-    my @vals = map { ref $_ eq 'ARRAY' ? @$_ : $_ } @_;
-    $self->query_form($self->query_form, $key => \@vals);  # XXX
+    $self->query_form($self->query_form, $key => \@_);  # XXX
     return;
 }
 
@@ -174,7 +181,7 @@ value becomes an array reference.
 
 Note that sequence information is lost.  This means that:
 
-   $u->query_form_hash($u->query_form_hash);
+   $u->query_form_hash($u->query_form_hash)
 
 is not necessarily a no-op, as it may reorder the key/value pairs.
 The values returned by the query_param() method should stay the same

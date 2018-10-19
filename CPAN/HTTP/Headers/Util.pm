@@ -1,26 +1,18 @@
 package HTTP::Headers::Util;
 
 use strict;
-use warnings;
+use vars qw($VERSION @ISA @EXPORT_OK);
 
-our $VERSION = "6.11";
+$VERSION = sprintf("%d.%02d", q$Revision: 1.13 $ =~ /(\d+)\.(\d+)/);
 
-use base 'Exporter';
+require Exporter;
+@ISA=qw(Exporter);
 
-our @EXPORT_OK=qw(split_header_words _split_header_words join_header_words);
+@EXPORT_OK=qw(split_header_words join_header_words);
 
 
-sub split_header_words {
-    my @res = &_split_header_words;
-    for my $arr (@res) {
-	for (my $i = @$arr - 2; $i >= 0; $i -= 2) {
-	    $arr->[$i] = lc($arr->[$i]);
-	}
-    }
-    return @res;
-}
 
-sub _split_header_words
+sub split_header_words
 {
     my(@val) = @_;
     my @res;
@@ -149,14 +141,13 @@ the requirement for tokens).
   value             = token | quoted-string
 
 Each I<header> is represented by an anonymous array of key/value
-pairs.  The keys will be all be forced to lower case.
-The value for a simple token (not part of a parameter) is C<undef>.
-Syntactically incorrect headers will not necessarily be parsed as you
+pairs.  The value for a simple token (not part of a parameter) is C<undef>.
+Syntactically incorrect headers will not necessary be parsed as you
 would want.
 
 This is easier to describe with some examples:
 
-   split_header_words('foo="bar"; port="80,81"; DISCARD, BAR=baz');
+   split_header_words('foo="bar"; port="80,81"; discard, bar=baz');
    split_header_words('text/html; charset="iso-8859-1"');
    split_header_words('Basic realm="\\"foo\\\\bar\\""');
 
@@ -164,11 +155,7 @@ will return
 
    [foo=>'bar', port=>'80,81', discard=> undef], [bar=>'baz' ]
    ['text/html' => undef, charset => 'iso-8859-1']
-   [basic => undef, realm => "\"foo\\bar\""]
-
-If you don't want the function to convert tokens and attribute keys to
-lower case you can call it as C<_split_header_words> instead (with a
-leading underscore).
+   [Basic => undef, realm => "\"foo\\bar\""]
 
 =item join_header_words( @arrays )
 

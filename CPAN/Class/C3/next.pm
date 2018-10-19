@@ -7,7 +7,7 @@ no warnings 'redefine'; # for 00load.t w/ core support
 
 use Scalar::Util 'blessed';
 
-our $VERSION = '0.30';
+our $VERSION = '0.06';
 
 our %METHOD_CACHE;
 
@@ -66,7 +66,7 @@ use strict;
 use warnings;
 no warnings 'redefine'; # for 00load.t w/ core support
 
-our $VERSION = '0.30';
+our $VERSION = '0.02';
 
 sub method { (next::method($_[0]) || return)->(@_) }
 
@@ -83,7 +83,7 @@ Class::C3::next - Pure-perl next::method and friends
 =head1 DESCRIPTION
 
 This module is used internally by L<Class::C3> when
-necessary, and shouldn't be used (or required in
+neccesary, and shouldn't be used (or required in
 distribution dependencies) directly.  It
 defines C<next::method>, C<next::can>, and
 C<maybe::next::method> in pure perl.

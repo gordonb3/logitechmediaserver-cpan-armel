@@ -5,7 +5,7 @@ require 5.006_000;
 
 # Keep this < 1.00, so people can tell the fake
 #  mro.pm from the real one
-our $VERSION = '0.12';
+our $VERSION = '0.10';
 
 BEGIN {
     # Alias our private functions over to
@@ -49,19 +49,17 @@ MRO::Compat - mro::* interface compatibility for Perls < 5.9.5
 
 =head1 SYNOPSIS
 
-   package PPP;      use base qw/Exporter/;
-   package X;        use base qw/PPP/;
-   package Y;        use base qw/PPP/;
-   package Z;        use base qw/PPP/;
-
    package FooClass; use base qw/X Y Z/;
+   package X;        use base qw/ZZZ/;
+   package Y;        use base qw/ZZZ/;
+   package Z;        use base qw/ZZZ/;
 
    package main;
    use MRO::Compat;
    my $linear = mro::get_linear_isa('FooClass');
    print join(q{, }, @$linear);
 
-   # Prints: FooClass, X, PPP, Exporter, Y, Z
+   # Prints: "FooClass, X, ZZZ, Y, Z"
 
 =head1 DESCRIPTION
 
@@ -214,8 +212,8 @@ sub __get_mro {
 =head2 mro::get_isarev($classname)
 
 Returns an arrayref of classes who are subclasses of the
-given classname.  In other words, classes in whose @ISA
-hierarchy we appear, no matter how indirectly.
+given classname.  In other words, classes who we exist,
+however indirectly, in the @ISA inheritancy hierarchy of.
 
 This is much slower on pre-5.9.5 Perls with MRO::Compat
 than it is on 5.9.5+, as it has to search the entire

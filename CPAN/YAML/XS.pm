@@ -1,7 +1,7 @@
 use strict; use warnings;
 
 package YAML::XS;
-our $VERSION = '0.59';
+our $VERSION = '0.69';
 
 use base 'Exporter';
 
@@ -10,6 +10,7 @@ use base 'Exporter';
 %YAML::XS::EXPORT_TAGS = (
     all => [qw(Dump Load LoadFile DumpFile)],
 );
+our ($UseCode, $DumpCode, $LoadCode, $Boolean, $LoadBlessed);
 # $YAML::XS::UseCode = 0;
 # $YAML::XS::DumpCode = 0;
 # $YAML::XS::LoadCode = 0;
@@ -17,11 +18,12 @@ use base 'Exporter';
 $YAML::XS::QuoteNumericStrings = 1;
 
 use YAML::XS::LibYAML qw(Load Dump);
+use Scalar::Util qw/ openhandle /;
 
 sub DumpFile {
     my $OUT;
     my $filename = shift;
-    if (ref $filename eq 'GLOB') {
+    if (openhandle $filename) {
         $OUT = $filename;
     }
     else {
@@ -39,7 +41,7 @@ sub DumpFile {
 sub LoadFile {
     my $IN;
     my $filename = shift;
-    if (ref $filename eq 'GLOB') {
+    if (openhandle $filename) {
         $IN = $filename;
     }
     else {
@@ -49,15 +51,11 @@ sub LoadFile {
     return YAML::XS::LibYAML::Load(do { local $/; local $_ = <$IN> });
 }
 
-# XXX Figure out how to lazily load this module.
-# So far I've tried using the C function:
-#      load_module(PERL_LOADMOD_NOIMPORT, newSVpv("B::Deparse", 0), NULL);
-# But it didn't seem to work.
-use B::Deparse;
 
 # XXX The following code should be moved from Perl to C.
 $YAML::XS::coderef2text = sub {
     my $coderef = shift;
+    require B::Deparse;
     my $deparse = B::Deparse->new();
     my $text;
     eval {
@@ -118,13 +116,15 @@ use constant _QR_MAP => {
 };
 
 sub __qr_loader {
-    if ($_[0] =~ /\A  \(\?  ([ixsm]*)  (?:-  (?:[ixsm]*))?  : (.*) \)  \z/x) {
-        my $sub = _QR_MAP->{$1} || _QR_MAP->{''};
-        &$sub($2);
+    if ($_[0] =~ /\A  \(\?  ([\^uixsm]*)  (?:-  (?:[ixsm]*))?  : (.*) \)  \z/x) {
+        my ($flags, $re) = ($1, $2);
+        $flags =~ s/^\^//;
+        $flags =~ tr/u//d;
+        my $sub = _QR_MAP->{$flags} || _QR_MAP->{''};
+        my $qr = &$sub($re);
+        return $qr;
     }
-    else {
-        qr/$_[0]/;
-    }
+    return qr/$_[0]/;
 }
 
 1;

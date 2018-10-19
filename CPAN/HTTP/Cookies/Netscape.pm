@@ -3,7 +3,7 @@ package HTTP::Cookies::Netscape;
 use strict;
 use vars qw(@ISA $VERSION);
 
-$VERSION = "6.00";
+$VERSION = sprintf("%d.%02d", q$Revision: 1.26 $ =~ /(\d+)\.(\d+)/);
 
 require HTTP::Cookies;
 @ISA=qw(HTTP::Cookies);
@@ -19,15 +19,19 @@ sub load
     my $magic = <FILE>;
     unless ($magic =~ /^\#(?: Netscape)? HTTP Cookie File/) {
 	warn "$file does not look like a netscape cookies file" if $^W;
+	LWP::Debug::debug("$file doesn't look like a netscape cookies file. Skipping.");
 	close(FILE);
 	return;
     }
+    LWP::Debug::debug("Okay, $file is a netscape cookies file.  Parsing.");
     my $now = time() - $HTTP::Cookies::EPOCH_OFFSET;
     while (<FILE>) {
 	next if /^\s*\#/;
 	next if /^\s*$/;
 	tr/\n\r//d;
 	my($domain,$bool1,$path,$secure, $expires,$key,$val) = split(/\t/, $_);
+	LWP::Debug::debug(join '', "-Reading NS cookie: ",
+	  map(" <$_>", split(/\t/, $_)));
 	$secure = ($secure eq "TRUE");
 	$self->set_cookie(undef,$key,$val,$path,$domain,undef,
 			  0,$secure,$expires-$now, 0);
@@ -43,8 +47,6 @@ sub save
     local(*FILE, $_);
     open(FILE, ">$file") || return;
 
-    # Use old, now broken link to the old cookie spec just in case something
-    # else (not us!) requires the comment block exactly this way.
     print FILE <<EOT;
 # Netscape HTTP Cookie File
 # http://www.netscape.com/newsref/std/cookie_spec.html

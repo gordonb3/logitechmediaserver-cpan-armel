@@ -1,4 +1,4 @@
-# $Id$
+# $Id: Stream.pm 1097 2004-07-16 12:55:19Z dean $
 
 package XML::SAX::PurePerl::Reader::Stream;
 
@@ -8,62 +8,60 @@ use vars qw(@ISA);
 use XML::SAX::PurePerl::Reader qw(
     EOF
     BUFFER
+    INTERNAL_BUFFER
     LINE
     COLUMN
+    CURRENT
     ENCODING
-    XML_VERSION
 );
 use XML::SAX::Exception;
 
 @ISA = ('XML::SAX::PurePerl::Reader');
 
-# subclassed by adding 1 to last element
-use constant FH => 8;
-use constant BUFFER_SIZE => 4096;
+use constant FH => 11;
+use constant BUFFER_SIZE => 12;
 
 sub new {
     my $class = shift;
     my $ioref = shift;
     XML::SAX::PurePerl::Reader::set_raw_stream($ioref);
     my @parts;
-    @parts[FH, LINE, COLUMN, BUFFER, EOF, XML_VERSION] =
-        ($ioref, 1,   0,      '',     0,   '1.0');
+    @parts[FH, LINE, COLUMN, BUFFER, EOF, INTERNAL_BUFFER, BUFFER_SIZE] =
+        ($ioref, 1,   0,      '',     0,   '',              1);
     return bless \@parts, $class;
 }
 
-sub read_more {
+sub next {
     my $self = shift;
-    my $buf;
-    my $bytesread = read($self->[FH], $buf, BUFFER_SIZE);
+    
+    # check for chars in buffer first.
+    if (length($self->[BUFFER])) {
+        return $self->[CURRENT] = substr($self->[BUFFER], 0, 1, ''); # last param truncates buffer
+    }
+    
+
+    if (length($self->[INTERNAL_BUFFER])) {
+BUFFERED_READ:
+        $self->[CURRENT] = substr($self->[INTERNAL_BUFFER], 0, 1, '');
+        if ($self->[CURRENT] eq "\x0A") {
+            $self->[LINE]++;
+            $self->[COLUMN] = 1;
+        }
+        else { $self->[COLUMN]++ }
+        return;
+    }
+    
+    my $bytesread = read($self->[FH], $self->[INTERNAL_BUFFER], $self->[BUFFER_SIZE]);
     if ($bytesread) {
-        $self->[BUFFER] .= $buf;
-        return 1;
+        goto BUFFERED_READ;
     }
     elsif (defined($bytesread)) {
         $self->[EOF]++;
-        return 0;
+        return $self->[CURRENT] = undef;
     }
-    else {
-        throw XML::SAX::Exception::Parse(
-            Message => "Error reading from filehandle: $!",
-        );
-    }
-}
-
-sub move_along {
-    my $self = shift;
-    my $discarded = substr($self->[BUFFER], 0, $_[0], '');
-    
-    # Wish I could skip this lot - tells us where we are in the file
-    my $lines = $discarded =~ tr/\n//;
-    $self->[LINE] += $lines;
-    if ($lines) {
-        $discarded =~ /\n([^\n]*)$/;
-        $self->[COLUMN] = length($1);
-    }
-    else {
-        $self->[COLUMN] += $_[0];
-    }
+    throw XML::SAX::Exception::Parse(
+        Message => "Error reading from filehandle: $!",
+    );
 }
 
 sub set_encoding {
@@ -71,7 +69,7 @@ sub set_encoding {
     my ($encoding) = @_;
     # warn("set encoding to: $encoding\n");
     XML::SAX::PurePerl::Reader::switch_encoding_stream($self->[FH], $encoding);
-    XML::SAX::PurePerl::Reader::switch_encoding_string($self->[BUFFER], $encoding);
+    $self->[BUFFER_SIZE] = 1024;
     $self->[ENCODING] = $encoding;
 }
 

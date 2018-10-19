@@ -1,8 +1,10 @@
 package LWP::Protocol;
 
+# $Id: Protocol.pm 8931 2006-08-11 16:44:43Z dsully $
+
 require LWP::MemberMixin;
 @ISA = qw(LWP::MemberMixin);
-$VERSION = "6.15";
+$VERSION = sprintf("%d.%02d", q$Revision: 1.43 $ =~ /(\d+)\.(\d+)/);
 
 use strict;
 use Carp ();
@@ -22,6 +24,7 @@ sub new
 	ua => $ua,
 
 	# historical/redundant
+        parse_head => $ua->{parse_head},
         max_size => $ua->{max_size},
     }, $class;
 
@@ -87,6 +90,7 @@ sub request
 
 # legacy
 sub timeout    { shift->_elem('timeout',    @_); }
+sub parse_head { shift->_elem('parse_head', @_); }
 sub max_size   { shift->_elem('max_size',   @_); }
 
 
@@ -94,84 +98,80 @@ sub collect
 {
     my ($self, $arg, $response, $collector) = @_;
     my $content;
-    my($ua, $max_size) = @{$self}{qw(ua max_size)};
+    my($parse_head, $max_size) = @{$self}{qw(parse_head max_size)};
 
-    eval {
-	local $\; # protect the print below from surprises
-        if (!defined($arg) || !$response->is_success) {
-            $response->{default_add_content} = 1;
-        }
-        elsif (!ref($arg) && length($arg)) {
-            open(my $fh, ">", $arg) or die "Can't write to '$arg': $!";
-	    binmode($fh);
-            push(@{$response->{handlers}{response_data}}, {
-                callback => sub {
-                    print $fh $_[3] or die "Can't write to '$arg': $!";
-                    1;
-                },
-            });
-            push(@{$response->{handlers}{response_done}}, {
-                callback => sub {
-		    close($fh) or die "Can't write to '$arg': $!";
-		    undef($fh);
-		},
-	    });
-        }
-        elsif (ref($arg) eq 'CODE') {
-            push(@{$response->{handlers}{response_data}}, {
-                callback => sub {
-		    &$arg($_[3], $_[0], $self);
-		    1;
-                },
-            });
-        }
-        else {
-            die "Unexpected collect argument '$arg'";
-        }
-
-        $ua->run_handlers("response_header", $response);
-
-        if (delete $response->{default_add_content}) {
-            push(@{$response->{handlers}{response_data}}, {
-		callback => sub {
-		    $_[0]->add_content($_[3]);
-		    1;
-		},
-	    });
-        }
-
-
-        my $content_size = 0;
-        my $length = $response->content_length;
-        my %skip_h;
-
-        while ($content = &$collector, length $$content) {
-            for my $h ($ua->handlers("response_data", $response)) {
-                next if $skip_h{$h};
-                unless ($h->{callback}->($response, $ua, $h, $$content)) {
-                    # XXX remove from $response->{handlers}{response_data} if present
-                    $skip_h{$h}++;
-                }
-            }
-            $content_size += length($$content);
-            $ua->progress(($length ? ($content_size / $length) : "tick"), $response);
-            if (defined($max_size) && $content_size > $max_size) {
-                $response->push_header("Client-Aborted", "max_size");
-                last;
-            }
-        }
-    };
-    my $err = $@;
-    delete $response->{handlers}{response_data};
-    delete $response->{handlers} unless %{$response->{handlers}};
-    if ($err) {
-        chomp($err);
-        $response->push_header('X-Died' => $err);
-        $response->push_header("Client-Aborted", "die");
-        return $response;
+    my $parser;
+    if ($parse_head && $response->content_type eq 'text/html') {
+	require HTML::HeadParser;
+	$parser = HTML::HeadParser->new($response->{'_headers'});
     }
+    my $content_size = 0;
 
-    return $response;
+    if (!defined($arg) || !$response->is_success) {
+	# scalar
+	while ($content = &$collector, length $$content) {
+	    if ($parser) {
+		$parser->parse($$content) or undef($parser);
+	    }
+	    LWP::Debug::debug("read " . length($$content) . " bytes");
+	    $response->add_content($$content);
+	    $content_size += length($$content);
+	    if (defined($max_size) && $content_size > $max_size) {
+		LWP::Debug::debug("Aborting because size limit exceeded");
+		$response->push_header("Client-Aborted", "max_size");
+		#my $tot = $response->header("Content-Length") || 0;
+		#$response->header("X-Content-Range", "bytes 0-$content_size/$tot");
+		last;
+	    }
+	}
+    }
+    elsif (!ref($arg)) {
+	# filename
+	open(OUT, ">$arg") or
+	    return HTTP::Response->new(&HTTP::Status::RC_INTERNAL_SERVER_ERROR,
+			  "Cannot write to '$arg': $!");
+        binmode(OUT);
+        local($\) = ""; # ensure standard $OUTPUT_RECORD_SEPARATOR
+	while ($content = &$collector, length $$content) {
+	    if ($parser) {
+		$parser->parse($$content) or undef($parser);
+	    }
+	    LWP::Debug::debug("read " . length($$content) . " bytes");
+	    print OUT $$content or die "Can't write to '$arg': $!";
+	    $content_size += length($$content);
+	    if (defined($max_size) && $content_size > $max_size) {
+		LWP::Debug::debug("Aborting because size limit exceeded");
+		$response->push_header("Client-Aborted", "max_size");
+		#my $tot = $response->header("Content-Length") || 0;
+		#$response->header("X-Content-Range", "bytes 0-$content_size/$tot");
+		last;
+	    }
+	}
+	close(OUT) or die "Can't write to '$arg': $!";
+    }
+    elsif (ref($arg) eq 'CODE') {
+	# read into callback
+	while ($content = &$collector, length $$content) {
+	    if ($parser) {
+		$parser->parse($$content) or undef($parser);
+	    }
+	    LWP::Debug::debug("read " . length($$content) . " bytes");
+            eval {
+		&$arg($$content, $response, $self);
+	    };
+	    if ($@) {
+	        chomp($@);
+		$response->push_header('X-Died' => $@);
+		$response->push_header("Client-Aborted", "die");
+		last;
+	    }
+	}
+    }
+    else {
+	return HTTP::Response->new(&HTTP::Status::RC_INTERNAL_SERVER_ERROR,
+				  "Unexpected collect argument  '$arg'");
+    }
+    $response;
 }
 
 
@@ -207,7 +207,7 @@ This class is used a the base class for all protocol implementations
 supported by the LWP library.
 
 When creating an instance of this class using
-C<LWP::Protocol::create($url)>, and you get an initialized subclass
+C<LWP::Protocol::create($url)>, and you get an initialised subclass
 appropriate for that access method. In other words, the
 LWP::Protocol::create() function calls the constructor for one of its
 subclasses.
@@ -260,7 +260,7 @@ routine, then content is passed to this routine.
 The $collector is a routine that will be called and which is
 responsible for returning pieces (as ref to scalar) of the content to
 process.  The $collector signals EOF by returning a reference to an
-empty string.
+empty sting.
 
 The return value from collect() is the $response object reference.
 
@@ -275,8 +275,6 @@ Can be called when the whole response content is available as
 $content.  This will invoke collect() with a collector callback that
 returns a reference to $content the first time and an empty string the
 next.
-
-=back
 
 =head1 SEE ALSO
 

@@ -1,41 +1,32 @@
 package SQL::Abstract; # see doc at end of file
 
+# LDNOTE : this code is heavy refactoring from original SQLA.
+# Several design decisions will need discussion during
+# the test / diffusion / acceptance phase; those are marked with flag
+# 'LDNOTE' (note by laurent.dami AT free.fr)
+
+use Carp;
 use strict;
 use warnings;
-use Carp ();
-use List::Util ();
-use Scalar::Util ();
+use List::Util   qw/first/;
+use Scalar::Util qw/blessed/;
 
 #======================================================================
 # GLOBALS
 #======================================================================
 
-our $VERSION  = '1.78';
+our $VERSION  = '1.56';
 
 # This would confuse some packagers
-$VERSION = eval $VERSION if $VERSION =~ /_/; # numify for warning-free dev releases
+#$VERSION      = eval $VERSION; # numify for warning-free dev releases
 
 our $AUTOLOAD;
 
 # special operators (-in, -between). May be extended/overridden by user.
 # See section WHERE: BUILTIN SPECIAL OPERATORS below for implementation
 my @BUILTIN_SPECIAL_OPS = (
-  {regex => qr/^ (?: not \s )? between $/ix, handler => '_where_field_BETWEEN'},
-  {regex => qr/^ (?: not \s )? in      $/ix, handler => '_where_field_IN'},
-  {regex => qr/^ ident                 $/ix, handler => '_where_op_IDENT'},
-  {regex => qr/^ value                 $/ix, handler => '_where_op_VALUE'},
-  {regex => qr/^ is (?: \s+ not )?     $/ix, handler => '_where_field_IS'},
-);
-
-# unaryish operators - key maps to handler
-my @BUILTIN_UNARY_OPS = (
-  # the digits are backcompat stuff
-  { regex => qr/^ and  (?: [_\s]? \d+ )? $/xi, handler => '_where_op_ANDOR' },
-  { regex => qr/^ or   (?: [_\s]? \d+ )? $/xi, handler => '_where_op_ANDOR' },
-  { regex => qr/^ nest (?: [_\s]? \d+ )? $/xi, handler => '_where_op_NEST' },
-  { regex => qr/^ (?: not \s )? bool     $/xi, handler => '_where_op_BOOL' },
-  { regex => qr/^ ident                  $/xi, handler => '_where_op_IDENT' },
-  { regex => qr/^ value                  $/xi, handler => '_where_op_VALUE' },
+  {regex => qr/^(not )?between$/i, handler => '_where_field_BETWEEN'},
+  {regex => qr/^(not )?in$/i,      handler => '_where_field_IN'},
 );
 
 #======================================================================
@@ -50,12 +41,12 @@ sub _debug {
 
 sub belch (@) {
   my($func) = (caller(1))[3];
-  Carp::carp "[$func] Warning: ", @_;
+  carp "[$func] Warning: ", @_;
 }
 
 sub puke (@) {
   my($func) = (caller(1))[3];
-  Carp::croak "[$func] Fatal: ", @_;
+  croak "[$func] Fatal: ", @_;
 }
 
 
@@ -75,58 +66,29 @@ sub new {
   $opt{logic} = $opt{logic} ? uc $opt{logic} : 'OR';
 
   # how to return bind vars
+  # LDNOTE: changed nwiger code : why this 'delete' ??
+  # $opt{bindtype} ||= delete($opt{bind_type}) || 'normal';
   $opt{bindtype} ||= 'normal';
 
   # default comparison is "=", but can be overridden
   $opt{cmp} ||= '=';
 
-  # try to recognize which are the 'equality' and 'inequality' ops
-  # (temporary quickfix (in 2007), should go through a more seasoned API)
-  $opt{equality_op}   = qr/^( \Q$opt{cmp}\E | \= )$/ix;
-  $opt{inequality_op} = qr/^( != | <> )$/ix;
-
-  $opt{like_op}       = qr/^ (is\s+)? r?like $/xi;
-  $opt{not_like_op}   = qr/^ (is\s+)? not \s+ r?like $/xi;
+  # try to recognize which are the 'equality' and 'unequality' ops
+  # (temporary quickfix, should go through a more seasoned API)
+ $opt{equality_op}   = qr/^(\Q$opt{cmp}\E|is|(is\s+)?like)$/i;
+ $opt{inequality_op} = qr/^(!=|<>|(is\s+)?not(\s+like)?)$/i;
 
   # SQL booleans
   $opt{sqltrue}  ||= '1=1';
   $opt{sqlfalse} ||= '0=1';
 
-  # special operators
+  # special operators 
   $opt{special_ops} ||= [];
-  # regexes are applied in order, thus push after user-defines
   push @{$opt{special_ops}}, @BUILTIN_SPECIAL_OPS;
-
-  # unary operators
-  $opt{unary_ops} ||= [];
-  push @{$opt{unary_ops}}, @BUILTIN_UNARY_OPS;
-
-  # rudimentary sanity-check for user supplied bits treated as functions/operators
-  # If a purported  function matches this regular expression, an exception is thrown.
-  # Literal SQL is *NOT* subject to this check, only functions (and column names
-  # when quoting is not in effect)
-
-  # FIXME
-  # need to guard against ()'s in column names too, but this will break tons of
-  # hacks... ideas anyone?
-  $opt{injection_guard} ||= qr/
-    \;
-      |
-    ^ \s* go \s
-  /xmi;
 
   return bless \%opt, $class;
 }
 
-
-sub _assert_pass_injection_guard {
-  if ($_[1] =~ $_[0]->{injection_guard}) {
-    my $class = ref $_[0];
-    puke "Possible SQL injection attempt '$_[1]'. If this is indeed a part of the "
-     . "desired SQL use literal SQL ( \'...' or \[ '...' ] ) or supply your own "
-     . "{injection_guard} attribute to ${class}->new()"
-  }
-}
 
 
 #======================================================================
@@ -134,35 +96,14 @@ sub _assert_pass_injection_guard {
 #======================================================================
 
 sub insert {
-  my $self    = shift;
-  my $table   = $self->_table(shift);
-  my $data    = shift || return;
-  my $options = shift;
+  my $self  = shift;
+  my $table = $self->_table(shift);
+  my $data  = shift || return;
 
   my $method       = $self->_METHOD_FOR_refkind("_insert", $data);
-  my ($sql, @bind) = $self->$method($data);
+  my ($sql, @bind) = $self->$method($data); 
   $sql = join " ", $self->_sqlcase('insert into'), $table, $sql;
-
-  if ($options->{returning}) {
-    my ($s, @b) = $self->_insert_returning ($options);
-    $sql .= $s;
-    push @bind, @b;
-  }
-
   return wantarray ? ($sql, @bind) : $sql;
-}
-
-sub _insert_returning {
-  my ($self, $options) = @_;
-
-  my $f = $options->{returning};
-
-  my $fieldlist = $self->_SWITCH_refkind($f, {
-    ARRAYREF     => sub {join ', ', map { $self->_quote($_) } @$f;},
-    SCALAR       => sub {$self->_quote($f)},
-    SCALARREF    => sub {$$f},
-  });
-  return $self->_sqlcase(' returning ') . $fieldlist;
 }
 
 sub _insert_HASHREF { # explicit list of fields and then values
@@ -220,7 +161,7 @@ sub _insert_values {
 
     $self->_SWITCH_refkind($v, {
 
-      ARRAYREF => sub {
+      ARRAYREF => sub { 
         if ($self->{array_datatypes}) { # if array datatype are activated
           push @values, '?';
           push @all_bind, $self->_bindtype($column, $v);
@@ -240,7 +181,7 @@ sub _insert_values {
         push @all_bind, @bind;
       },
 
-      # THINK : anything useful to do with a HASHREF ?
+      # THINK : anything useful to do with a HASHREF ? 
       HASHREF => sub {  # (nothing, but old SQLA passed it through)
         #TODO in SQLA >= 2.0 it will die instead
         belch "HASH ref as bind value in insert is not supported";
@@ -289,7 +230,7 @@ sub update {
     my $label = $self->_quote($k);
 
     $self->_SWITCH_refkind($v, {
-      ARRAYREF => sub {
+      ARRAYREF => sub { 
         if ($self->{array_datatypes}) { # array datatype
           push @set, "$label = ?";
           push @all_bind, $self->_bindtype($k, $v);
@@ -309,19 +250,7 @@ sub update {
       },
       SCALARREF => sub {  # literal SQL without bind
         push @set, "$label = $$v";
-      },
-      HASHREF => sub {
-        my ($op, $arg, @rest) = %$v;
-
-        puke 'Operator calls in update must be in the form { -op => $arg }'
-          if (@rest or not $op =~ /^\-(.+)/);
-
-        local $self->{_nested_func_lhs} = $k;
-        my ($sql, @bind) = $self->_where_unary_op ($1, $arg);
-
-        push @set, "$label = $sql";
-        push @all_bind, @bind;
-      },
+       },
       SCALAR_or_UNDEF => sub {
         push @set, "$label = ?";
         push @all_bind, $self->_bindtype($k, $v);
@@ -361,11 +290,11 @@ sub select {
 
   my $f = (ref $fields eq 'ARRAY') ? join ', ', map { $self->_quote($_) } @$fields
                                    : $fields;
-  my $sql = join(' ', $self->_sqlcase('select'), $f,
+  my $sql = join(' ', $self->_sqlcase('select'), $f, 
                       $self->_sqlcase('from'),   $table)
           . $where_sql;
 
-  return wantarray ? ($sql, @bind) : $sql;
+  return wantarray ? ($sql, @bind) : $sql; 
 }
 
 #======================================================================
@@ -382,7 +311,7 @@ sub delete {
   my($where_sql, @bind) = $self->where($where);
   my $sql = $self->_sqlcase('delete from') . " $table" . $where_sql;
 
-  return wantarray ? ($sql, @bind) : $sql;
+  return wantarray ? ($sql, @bind) : $sql; 
 }
 
 
@@ -405,7 +334,7 @@ sub where {
     $sql .= $self->_order_by($order);
   }
 
-  return wantarray ? ($sql, @bind) : $sql;
+  return wantarray ? ($sql, @bind) : $sql; 
 }
 
 
@@ -415,11 +344,12 @@ sub _recurse_where {
   # dispatch on appropriate method according to refkind of $where
   my $method = $self->_METHOD_FOR_refkind("_where", $where);
 
-  my ($sql, @bind) =  $self->$method($where, $logic);
 
-  # DBIx::Class directly calls _recurse_where in scalar context, so
+  my ($sql, @bind) =  $self->$method($where, $logic); 
+
+  # DBIx::Class directly calls _recurse_where in scalar context, so 
   # we must implement it, even if not in the official API
-  return wantarray ? ($sql, @bind) : $sql;
+  return wantarray ? ($sql, @bind) : $sql; 
 }
 
 
@@ -439,7 +369,7 @@ sub _where_ARRAYREF {
 
   my (@sql_clauses, @all_bind);
   # need to use while() so can shift() for pairs
-  while (my $el = shift @clauses) {
+  while (my $el = shift @clauses) { 
 
     # switch according to kind of $el and get corresponding ($sql, @bind)
     my ($sql, @bind) = $self->_SWITCH_refkind($el, {
@@ -447,13 +377,14 @@ sub _where_ARRAYREF {
       # skip empty elements, otherwise get invalid trailing AND stuff
       ARRAYREF  => sub {$self->_recurse_where($el)        if @$el},
 
-      ARRAYREFREF => sub {
-        my ($s, @b) = @$$el;
-        $self->_assert_bindval_matches_bindtype(@b);
-        ($s, @b);
-      },
+      ARRAYREFREF => sub { @{${$el}}                 if @{${$el}}},
 
       HASHREF   => sub {$self->_recurse_where($el, 'and') if %$el},
+           # LDNOTE : previous SQLA code for hashrefs was creating a dirty
+           # side-effect: the first hashref within an array would change
+           # the global logic to 'AND'. So [ {cond1, cond2}, [cond3, cond4] ]
+           # was interpreted as "(cond1 AND cond2) OR (cond3 AND cond4)", 
+           # whereas it should be "(cond1 AND cond2) OR (cond3 OR cond4)".
 
       SCALARREF => sub { ($$el);                                 },
 
@@ -478,8 +409,8 @@ sub _where_ARRAYREF {
 
 sub _where_ARRAYREFREF {
     my ($self, $where) = @_;
-    my ($sql, @bind) = @$$where;
-    $self->_assert_bindval_matches_bindtype(@bind);
+    my ($sql, @bind) = @{${$where}};
+
     return ($sql, @bind);
 }
 
@@ -491,38 +422,15 @@ sub _where_HASHREF {
   my ($self, $where) = @_;
   my (@sql_clauses, @all_bind);
 
-  for my $k (sort keys %$where) {
+  for my $k (sort keys %$where) { 
     my $v = $where->{$k};
 
-    # ($k => $v) is either a special unary op or a regular hashpair
-    my ($sql, @bind) = do {
-      if ($k =~ /^-./) {
-        # put the operator in canonical form
-        my $op = $k;
-        $op = substr $op, 1;  # remove initial dash
-        $op =~ s/^\s+|\s+$//g;# remove leading/trailing space
-        $op =~ s/\s+/ /g;     # compress whitespace
-
-        # so that -not_foo works correctly
-        $op =~ s/^not_/NOT /i;
-
-        $self->_debug("Unary OP(-$op) within hashref, recursing...");
-        my ($s, @b) = $self->_where_unary_op ($op, $v);
-
-        # top level vs nested
-        # we assume that handled unary ops will take care of their ()s
-        $s = "($s)" unless (
-          List::Util::first {$op =~ $_->{regex}} @{$self->{unary_ops}}
-            or
-          defined($self->{_nested_func_lhs}) && ($self->{_nested_func_lhs} eq $k)
-        );
-        ($s, @b);
-      }
-      else {
-        my $method = $self->_METHOD_FOR_refkind("_where_hashpair", $v);
-        $self->$method($k, $v);
-      }
-    };
+    # ($k => $v) is either a special op or a regular hashpair
+    my ($sql, @bind) = ($k =~ /^-(.+)/) ? $self->_where_op_in_hash($1, $v)
+                                        : do {
+         my $method = $self->_METHOD_FOR_refkind("_where_hashpair", $v);
+         $self->$method($k, $v);
+       };
 
     push @sql_clauses, $sql;
     push @all_bind, @bind;
@@ -531,182 +439,62 @@ sub _where_HASHREF {
   return $self->_join_sql_clauses('and', \@sql_clauses, \@all_bind);
 }
 
-sub _where_unary_op {
-  my ($self, $op, $rhs) = @_;
 
-  if (my $op_entry = List::Util::first {$op =~ $_->{regex}} @{$self->{unary_ops}}) {
-    my $handler = $op_entry->{handler};
+sub _where_op_in_hash {
+  my ($self, $op_str, $v) = @_; 
 
-    if (not ref $handler) {
-      if ($op =~ s/ [_\s]? \d+ $//x ) {
-        belch 'Use of [and|or|nest]_N modifiers is deprecated and will be removed in SQLA v2.0. '
-            . "You probably wanted ...-and => [ -$op => COND1, -$op => COND2 ... ]";
-      }
-      return $self->$handler ($op, $rhs);
-    }
-    elsif (ref $handler eq 'CODE') {
-      return $handler->($self, $op, $rhs);
-    }
-    else {
-      puke "Illegal handler for operator $op - expecting a method name or a coderef";
-    }
+  $op_str =~ /^ (AND|OR|NEST) ( \_? \d* ) $/xi
+    or puke "unknown operator: -$op_str";
+
+  my $op = uc($1); # uppercase, remove trailing digits
+  if ($2) {
+    belch 'Use of [and|or|nest]_N modifiers is deprecated and will be removed in SQLA v2.0. '
+          . "You probably wanted ...-and => [ $op_str => COND1, $op_str => COND2 ... ]";
   }
 
-  $self->_debug("Generic unary OP: $op - recursing as function");
-
-  $self->_assert_pass_injection_guard($op);
-
-  my ($sql, @bind) = $self->_SWITCH_refkind ($rhs, {
-    SCALAR =>   sub {
-      puke "Illegal use of top-level '$op'"
-        unless $self->{_nested_func_lhs};
-
-      return (
-        $self->_convert('?'),
-        $self->_bindtype($self->{_nested_func_lhs}, $rhs)
-      );
-    },
-    FALLBACK => sub {
-      $self->_recurse_where ($rhs)
-    },
-  });
-
-  $sql = sprintf ('%s %s',
-    $self->_sqlcase($op),
-    $sql,
-  );
-
-  return ($sql, @bind);
-}
-
-sub _where_op_ANDOR {
-  my ($self, $op, $v) = @_;
+  $self->_debug("OP(-$op) within hashref, recursing...");
 
   $self->_SWITCH_refkind($v, {
+
     ARRAYREF => sub {
-      return $self->_where_ARRAYREF($v, $op);
+      return $self->_where_ARRAYREF($v, $op eq 'NEST' ? '' : $op);
     },
 
     HASHREF => sub {
-      return ( $op =~ /^or/i )
-        ? $self->_where_ARRAYREF( [ map { $_ => $v->{$_} } ( sort keys %$v ) ], $op )
-        : $self->_where_HASHREF($v);
+      if ($op eq 'OR') {
+        return $self->_where_ARRAYREF([ map { $_ => $v->{$_} } (sort keys %$v) ], 'OR');
+      } 
+      else {                  # NEST | AND
+        return $self->_where_HASHREF($v);
+      }
     },
 
-    SCALARREF  => sub {
-      puke "-$op => \\\$scalar makes little sense, use " .
-        ($op =~ /^or/i
-          ? '[ \$scalar, \%rest_of_conditions ] instead'
-          : '-and => [ \$scalar, \%rest_of_conditions ] instead'
-        );
+    SCALARREF  => sub {         # literal SQL
+      $op eq 'NEST' 
+        or puke "-$op => \\\$scalar not supported, use -nest => ...";
+      return ($$v); 
     },
 
-    ARRAYREFREF => sub {
-      puke "-$op => \\[...] makes little sense, use " .
-        ($op =~ /^or/i
-          ? '[ \[...], \%rest_of_conditions ] instead'
-          : '-and => [ \[...], \%rest_of_conditions ] instead'
-        );
+    ARRAYREFREF => sub {        # literal SQL
+      $op eq 'NEST' 
+        or puke "-$op => \\[..] not supported, use -nest => ...";
+      return @{${$v}};
     },
 
     SCALAR => sub { # permissively interpreted as SQL
-      puke "-$op => \$value makes little sense, use -bool => \$value instead";
-    },
-
-    UNDEF => sub {
-      puke "-$op => undef not supported";
-    },
-   });
-}
-
-sub _where_op_NEST {
-  my ($self, $op, $v) = @_;
-
-  $self->_SWITCH_refkind($v, {
-
-    SCALAR => sub { # permissively interpreted as SQL
+      $op eq 'NEST' 
+        or puke "-$op => 'scalar' not supported, use -nest => \\'scalar'";
       belch "literal SQL should be -nest => \\'scalar' "
           . "instead of -nest => 'scalar' ";
-      return ($v);
+      return ($v); 
     },
 
     UNDEF => sub {
       puke "-$op => undef not supported";
     },
-
-    FALLBACK => sub {
-      $self->_recurse_where ($v);
-    },
-
    });
 }
 
-
-sub _where_op_BOOL {
-  my ($self, $op, $v) = @_;
-
-  my ($s, @b) = $self->_SWITCH_refkind($v, {
-    SCALAR => sub { # interpreted as SQL column
-      $self->_convert($self->_quote($v));
-    },
-
-    UNDEF => sub {
-      puke "-$op => undef not supported";
-    },
-
-    FALLBACK => sub {
-      $self->_recurse_where ($v);
-    },
-  });
-
-  $s = "(NOT $s)" if $op =~ /^not/i;
-  ($s, @b);
-}
-
-
-sub _where_op_IDENT {
-  my $self = shift;
-  my ($op, $rhs) = splice @_, -2;
-  if (ref $rhs) {
-    puke "-$op takes a single scalar argument (a quotable identifier)";
-  }
-
-  # in case we are called as a top level special op (no '=')
-  my $lhs = shift;
-
-  $_ = $self->_convert($self->_quote($_)) for ($lhs, $rhs);
-
-  return $lhs
-    ? "$lhs = $rhs"
-    : $rhs
-  ;
-}
-
-sub _where_op_VALUE {
-  my $self = shift;
-  my ($op, $rhs) = splice @_, -2;
-
-  # in case we are called as a top level special op (no '=')
-  my $lhs = shift;
-
-  my @bind =
-    $self->_bindtype (
-      ($lhs || $self->{_nested_func_lhs}),
-      $rhs,
-    )
-  ;
-
-  return $lhs
-    ? (
-      $self->_convert($self->_quote($lhs)) . ' = ' . $self->_convert('?'),
-      @bind
-    )
-    : (
-      $self->_convert('?'),
-      @bind,
-    )
-  ;
-}
 
 sub _where_hashpair_ARRAYREF {
   my ($self, $k, $v) = @_;
@@ -731,8 +519,9 @@ sub _where_hashpair_ARRAYREF {
     my $logic = $op ? substr($op, 1) : '';
 
     return $self->_recurse_where(\@distributed, $logic);
-  }
+  } 
   else {
+    # LDNOTE : not sure of this one. What does "distribute over nothing" mean?
     $self->_debug("empty ARRAY($k) means 0=1");
     return ($self->{sqlfalse});
   }
@@ -742,40 +531,26 @@ sub _where_hashpair_HASHREF {
   my ($self, $k, $v, $logic) = @_;
   $logic ||= 'and';
 
-  local $self->{_nested_func_lhs} = $self->{_nested_func_lhs};
-
   my ($all_sql, @all_bind);
 
-  for my $orig_op (sort keys %$v) {
-    my $val = $v->{$orig_op};
+  for my $op (sort keys %$v) {
+    my $val = $v->{$op};
 
     # put the operator in canonical form
-    my $op = $orig_op;
-
-    # FIXME - we need to phase out dash-less ops
-    $op =~ s/^-//;        # remove possible initial dash
-    $op =~ s/^\s+|\s+$//g;# remove leading/trailing space
-    $op =~ s/\s+/ /g;     # compress whitespace
-
-    $self->_assert_pass_injection_guard($op);
-
-    # fixup is_not
-    $op =~ s/^is_not/IS NOT/i;
-
-    # so that -not_foo works correctly
-    $op =~ s/^not_/NOT /i;
+    $op =~ s/^-//;       # remove initial dash
+    $op =~ tr/_/ /;      # underscores become spaces
+    $op =~ s/^\s+//;     # no initial space
+    $op =~ s/\s+$//;     # no final space
+    $op =~ s/\s+/ /;     # multiple spaces become one
 
     my ($sql, @bind);
 
-    # CASE: col-value logic modifiers
-    if ( $orig_op =~ /^ \- (and|or) $/xi ) {
-      ($sql, @bind) = $self->_where_hashpair_HASHREF($k, $val, $1);
-    }
     # CASE: special operators like -in or -between
-    elsif ( my $special_op = List::Util::first {$op =~ $_->{regex}} @{$self->{special_ops}} ) {
+    my $special_op = first {$op =~ $_->{regex}} @{$self->{special_ops}};
+    if ($special_op) {
       my $handler = $special_op->{handler};
       if (! $handler) {
-        puke "No handler supplied for special operator $orig_op";
+        puke "No handler supplied for special operator matching $special_op->{regex}";
       }
       elsif (not ref $handler) {
         ($sql, @bind) = $self->$handler ($k, $op, $val);
@@ -784,7 +559,7 @@ sub _where_hashpair_HASHREF {
         ($sql, @bind) = $handler->($self, $k, $op, $val);
       }
       else {
-        puke "Illegal handler for special operator $orig_op - expecting a method name or a coderef";
+        puke "Illegal handler for special operator matching $special_op->{regex} - expecting a method name or a coderef";
       }
     }
     else {
@@ -792,6 +567,12 @@ sub _where_hashpair_HASHREF {
 
         ARRAYREF => sub {       # CASE: col => {op => \@vals}
           ($sql, @bind) = $self->_where_field_op_ARRAYREF($k, $op, $val);
+        },
+
+        SCALARREF => sub {      # CASE: col => {op => \$scalar} (literal SQL without bind)
+          $sql  = join ' ', $self->_convert($self->_quote($k)),
+                            $self->_sqlcase($op),
+                            $$val;
         },
 
         ARRAYREFREF => sub {    # CASE: col => {op => \[$sql, @bind]} (literal SQL with bind)
@@ -803,29 +584,22 @@ sub _where_hashpair_HASHREF {
           @bind = @sub_bind;
         },
 
-        UNDEF => sub {          # CASE: col => {op => undef} : sql "IS (NOT)? NULL"
-          my $is =
-            $op =~ /^not$/i               ? 'is not'  # legacy
-          : $op =~ $self->{equality_op}   ? 'is'
-          : $op =~ $self->{like_op}       ? belch("Supplying an undefined argument to '@{[ uc $op]}' is deprecated") && 'is'
-          : $op =~ $self->{inequality_op} ? 'is not'
-          : $op =~ $self->{not_like_op}   ? belch("Supplying an undefined argument to '@{[ uc $op]}' is deprecated") && 'is not'
-          : puke "unexpected operator '$orig_op' with undef operand";
-
-          $sql = $self->_quote($k) . $self->_sqlcase(" $is null");
+        HASHREF => sub {
+          ($sql, @bind) = $self->_where_hashpair_HASHREF($k, $val, $op);
         },
 
-        FALLBACK => sub {       # CASE: col => {op/func => $stuff}
-
-          # retain for proper column type bind
-          $self->{_nested_func_lhs} ||= $k;
-
-          ($sql, @bind) = $self->_where_unary_op ($op, $val);
-
-          $sql = join (' ',
-            $self->_convert($self->_quote($k)),
-            $self->{_nested_func_lhs} eq $k ? $sql : "($sql)",  # top level vs nested
-          );
+        UNDEF => sub {          # CASE: col => {op => undef} : sql "IS (NOT)? NULL"
+          my $is = ($op =~ $self->{equality_op})   ? 'is'     :
+                   ($op =~ $self->{inequality_op}) ? 'is not' :
+               puke "unexpected operator '$op' with undef operand";
+          $sql = $self->_quote($k) . $self->_sqlcase(" $is null");
+        },
+        
+        FALLBACK => sub {       # CASE: col => {op => $scalar}
+          $sql  = join ' ', $self->_convert($self->_quote($k)),
+                            $self->_sqlcase($op),
+                            $self->_convert('?');
+          @bind = $self->_bindtype($k, $val);
         },
       });
     }
@@ -836,22 +610,7 @@ sub _where_hashpair_HASHREF {
   return ($all_sql, @all_bind);
 }
 
-sub _where_field_IS {
-  my ($self, $k, $op, $v) = @_;
 
-  my ($s) = $self->_SWITCH_refkind($v, {
-    UNDEF => sub {
-      join ' ',
-        $self->_convert($self->_quote($k)),
-        map { $self->_sqlcase($_)} ($op, 'null')
-    },
-    FALLBACK => sub {
-      puke "$op can only take undef as argument";
-    },
-  });
-
-  $s;
-}
 
 sub _where_field_op_ARRAYREF {
   my ($self, $k, $op, $vals) = @_;
@@ -859,47 +618,36 @@ sub _where_field_op_ARRAYREF {
   my @vals = @$vals;  #always work on a copy
 
   if(@vals) {
-    $self->_debug(sprintf '%s means multiple elements: [ %s ]',
-      $vals,
-      join (', ', map { defined $_ ? "'$_'" : 'NULL' } @vals ),
-    );
+    $self->_debug("ARRAY($vals) means multiple elements: [ @vals ]");
 
     # see if the first element is an -and/-or op
     my $logic;
-    if (defined $vals[0] && $vals[0] =~ /^ - ( AND|OR ) $/ix) {
+    if ($vals[0] =~ /^ - ( AND|OR ) $/ix) {
       $logic = uc $1;
       shift @vals;
-    }
-
-    # a long standing API wart - an attempt to change this behavior during
-    # the 1.50 series failed *spectacularly*. Warn instead and leave the
-    # behavior as is
-    if (
-      @vals > 1
-        and
-      (!$logic or $logic eq 'OR')
-        and
-      ( $op =~ $self->{inequality_op} or $op =~ $self->{not_like_op} )
-    ) {
-      my $o = uc($op);
-      belch "A multi-element arrayref as an argument to the inequality op '$o' "
-          . 'is technically equivalent to an always-true 1=1 (you probably wanted '
-          . "to say ...{ \$inequality_op => [ -and => \@values ] }... instead)"
-      ;
     }
 
     # distribute $op over each remaining member of @vals, append logic if exists
     return $self->_recurse_where([map { {$k => {$op, $_}} } @vals], $logic);
 
-  }
+    # LDNOTE : had planned to change the distribution logic when 
+    # $op =~ $self->{inequality_op}, because of Morgan laws : 
+    # with {field => {'!=' => [22, 33]}}, it would be ridiculous to generate
+    # WHERE field != 22 OR  field != 33 : the user probably means 
+    # WHERE field != 22 AND field != 33.
+    # To do this, replace the above to roughly :
+    # my $logic = ($op =~ $self->{inequality_op}) ? 'AND' : 'OR';
+    # return $self->_recurse_where([map { {$k => {$op, $_}} } @vals], $logic);
+
+  } 
   else {
-    # try to DWIM on equality operators
-    return
-      $op =~ $self->{equality_op}   ? $self->{sqlfalse}
-    : $op =~ $self->{like_op}       ? belch("Supplying an empty arrayref to '@{[ uc $op]}' is deprecated") && $self->{sqlfalse}
-    : $op =~ $self->{inequality_op} ? $self->{sqltrue}
-    : $op =~ $self->{not_like_op}   ? belch("Supplying an empty arrayref to '@{[ uc $op]}' is deprecated") && $self->{sqltrue}
-    : puke "operator '$op' applied on an empty array (field '$k')";
+    # try to DWIM on equality operators 
+    # LDNOTE : not 100% sure this is the correct thing to do ...
+    return ($self->{sqlfalse}) if $op =~ $self->{equality_op};
+    return ($self->{sqltrue})  if $op =~ $self->{inequality_op};
+
+    # otherwise
+    puke "operator '$op' applied on an empty array (field '$k')";
   }
 }
 
@@ -915,7 +663,7 @@ sub _where_hashpair_SCALARREF {
 sub _where_hashpair_ARRAYREFREF {
   my ($self, $k, $v) = @_;
   $self->_debug("REF($k) means literal SQL: @${$v}");
-  my ($sql, @bind) = @$$v;
+  my ($sql, @bind) = @${$v};
   $self->_assert_bindval_matches_bindtype(@bind);
   $sql  = $self->_quote($k) . " " . $sql;
   return ($sql, @bind );
@@ -925,8 +673,8 @@ sub _where_hashpair_ARRAYREFREF {
 sub _where_hashpair_SCALAR {
   my ($self, $k, $v) = @_;
   $self->_debug("NOREF($k) means simple key=val: $k $self->{cmp} $v");
-  my $sql = join ' ', $self->_convert($self->_quote($k)),
-                      $self->_sqlcase($self->{cmp}),
+  my $sql = join ' ', $self->_convert($self->_quote($k)), 
+                      $self->_sqlcase($self->{cmp}), 
                       $self->_convert('?');
   my @bind =  $self->_bindtype($k, $v);
   return ( $sql, @bind);
@@ -977,65 +725,38 @@ sub _where_UNDEF {
 sub _where_field_BETWEEN {
   my ($self, $k, $op, $vals) = @_;
 
-  my ($label, $and, $placeholder);
+  (ref $vals eq 'ARRAY' && @$vals == 2) or 
+  (ref $vals eq 'REF' && (@$$vals == 1 || @$$vals == 2 || @$$vals == 3))
+    or puke "special op 'between' requires an arrayref of two values (or a scalarref or arrayrefref for literal SQL)";
+
+  my ($clause, @bind, $label, $and, $placeholder);
   $label       = $self->_convert($self->_quote($k));
   $and         = ' ' . $self->_sqlcase('and') . ' ';
   $placeholder = $self->_convert('?');
   $op               = $self->_sqlcase($op);
 
-  my $invalid_args = "Operator '$op' requires either an arrayref with two defined values or expressions, or a single literal scalarref/arrayref-ref";
+  if (ref $vals eq 'REF') {
+    ($clause, @bind) = @$$vals;
+  }
+  else {
+    my (@all_sql, @all_bind);
 
-  my ($clause, @bind) = $self->_SWITCH_refkind($vals, {
-    ARRAYREFREF => sub {
-      my ($s, @b) = @$$vals;
-      $self->_assert_bindval_matches_bindtype(@b);
-      ($s, @b);
-    },
-    SCALARREF => sub {
-      return $$vals;
-    },
-    ARRAYREF => sub {
-      puke $invalid_args if @$vals != 2;
+    foreach my $val (@$vals) {
+      my ($sql, @bind) = $self->_SWITCH_refkind($val, {
+         SCALAR => sub {
+           return ($placeholder, ($val));
+         },
+         SCALARREF => sub {
+           return ($self->_convert($$val), ());
+         },
+      });
+      push @all_sql, $sql;
+      push @all_bind, @bind;
+    }
 
-      my (@all_sql, @all_bind);
-      foreach my $val (@$vals) {
-        my ($sql, @bind) = $self->_SWITCH_refkind($val, {
-           SCALAR => sub {
-             return ($placeholder, $self->_bindtype($k, $val) );
-           },
-           SCALARREF => sub {
-             return $$val;
-           },
-           ARRAYREFREF => sub {
-             my ($sql, @bind) = @$$val;
-             $self->_assert_bindval_matches_bindtype(@bind);
-             return ($sql, @bind);
-           },
-           HASHREF => sub {
-             my ($func, $arg, @rest) = %$val;
-             puke ("Only simple { -func => arg } functions accepted as sub-arguments to BETWEEN")
-               if (@rest or $func !~ /^ \- (.+)/x);
-             local $self->{_nested_func_lhs} = $k;
-             $self->_where_unary_op ($1 => $arg);
-           },
-           FALLBACK => sub {
-             puke $invalid_args,
-           },
-        });
-        push @all_sql, $sql;
-        push @all_bind, @bind;
-      }
-
-      return (
-        (join $and, @all_sql),
-        @all_bind
-      );
-    },
-    FALLBACK => sub {
-      puke $invalid_args,
-    },
-  });
-
+    $clause = (join $and, @all_sql);
+    @bind = $self->_bindtype($k, @all_bind);
+  }
   my $sql = "( $label $op $clause )";
   return ($sql, @bind)
 }
@@ -1054,49 +775,11 @@ sub _where_field_IN {
   my ($sql, @bind) = $self->_SWITCH_refkind($vals, {
     ARRAYREF => sub {     # list of choices
       if (@$vals) { # nonempty list
-        my (@all_sql, @all_bind);
+        my $placeholders  = join ", ", (($placeholder) x @$vals);
+        my $sql           = "$label $op ( $placeholders )";
+        my @bind = $self->_bindtype($k, @$vals);
 
-        for my $val (@$vals) {
-          my ($sql, @bind) = $self->_SWITCH_refkind($val, {
-            SCALAR => sub {
-              return ($placeholder, $val);
-            },
-            SCALARREF => sub {
-              return $$val;
-            },
-            ARRAYREFREF => sub {
-              my ($sql, @bind) = @$$val;
-              $self->_assert_bindval_matches_bindtype(@bind);
-              return ($sql, @bind);
-            },
-            HASHREF => sub {
-              my ($func, $arg, @rest) = %$val;
-              puke ("Only simple { -func => arg } functions accepted as sub-arguments to IN")
-                if (@rest or $func !~ /^ \- (.+)/x);
-              local $self->{_nested_func_lhs} = $k;
-              $self->_where_unary_op ($1 => $arg);
-            },
-            UNDEF => sub {
-              puke(
-                'SQL::Abstract before v1.75 used to generate incorrect SQL when the '
-              . "-$op operator was given an undef-containing list: !!!AUDIT YOUR CODE "
-              . 'AND DATA!!! (the upcoming Data::Query-based version of SQL::Abstract '
-              . 'will emit the logically correct SQL instead of raising this exception)'
-              );
-            },
-          });
-          push @all_sql, $sql;
-          push @all_bind, @bind;
-        }
-
-        return (
-          sprintf ('%s %s ( %s )',
-            $label,
-            $op,
-            join (', ', @all_sql)
-          ),
-          $self->_bindtype($k, @all_bind),
-        );
+        return ($sql, @bind);
       }
       else { # empty list : some databases won't understand "IN ()", so DWIM
         my $sql = ($op =~ /\bnot\b/i) ? $self->{sqltrue} : $self->{sqlfalse};
@@ -1104,37 +787,23 @@ sub _where_field_IN {
       }
     },
 
-    SCALARREF => sub {  # literal SQL
-      my $sql = $self->_open_outer_paren ($$vals);
-      return ("$label $op ( $sql )");
-    },
     ARRAYREFREF => sub {  # literal SQL with bind
       my ($sql, @bind) = @$$vals;
       $self->_assert_bindval_matches_bindtype(@bind);
-      $sql = $self->_open_outer_paren ($sql);
       return ("$label $op ( $sql )", @bind);
     },
 
-    UNDEF => sub {
-      puke "Argument passed to the '$op' operator can not be undefined";
-    },
-
     FALLBACK => sub {
-      puke "special op $op requires an arrayref (or scalarref/arrayref-ref)";
+      puke "special op 'in' requires an arrayref (or arrayref-ref)";
     },
   });
 
   return ($sql, @bind);
 }
 
-# Some databases (SQLite) treat col IN (1, 2) different from
-# col IN ( (1, 2) ). Use this to strip all outer parens while
-# adding them back in the corresponding method
-sub _open_outer_paren {
-  my ($self, $sql) = @_;
-  $sql = $1 while $sql =~ /^ \s* \( (.*) \) \s* $/xs;
-  return $sql;
-}
+
+
+
 
 
 #======================================================================
@@ -1172,11 +841,7 @@ sub _order_by_chunks {
       map { $self->_order_by_chunks ($_ ) } @$arg;
     },
 
-    ARRAYREFREF => sub {
-      my ($s, @b) = @$$arg;
-      $self->_assert_bindval_matches_bindtype(@b);
-      [ $s, @b ];
-    },
+    ARRAYREFREF => sub { [ @$$arg ] },
 
     SCALAR    => sub {$self->_quote($arg)},
 
@@ -1186,11 +851,11 @@ sub _order_by_chunks {
 
     HASHREF   => sub {
       # get first pair in hash
-      my ($key, $val, @rest) = %$arg;
+      my ($key, $val) = each %$arg;
 
       return () unless $key;
 
-      if ( @rest or not $key =~ /^-(desc|asc)/i ) {
+      if ( (keys %$arg) > 1 or not $key =~ /^-(desc|asc)/i ) {
         puke "hash passed to _order_by must have exactly one key (-desc or -asc)";
       }
 
@@ -1231,6 +896,7 @@ sub _table  {
     ARRAYREF     => sub {join ', ', map { $self->_quote($_) } @$from;},
     SCALAR       => sub {$self->_quote($from)},
     SCALARREF    => sub {$$from},
+    ARRAYREFREF  => sub {join ', ', @$from;},
   });
 }
 
@@ -1239,66 +905,80 @@ sub _table  {
 # UTILITY FUNCTIONS
 #======================================================================
 
-# highly optimized, as it's called way too often
 sub _quote {
-  # my ($self, $label) = @_;
+  my $self  = shift;
+  my $label = shift;
 
-  return '' unless defined $_[1];
-  return ${$_[1]} if ref($_[1]) eq 'SCALAR';
+  $label or puke "can't quote an empty label";
 
-  unless ($_[0]->{quote_char}) {
-    $_[0]->_assert_pass_injection_guard($_[1]);
-    return $_[1];
-  }
+  # left and right quote characters
+  my ($ql, $qr, @other) = $self->_SWITCH_refkind($self->{quote_char}, {
+    SCALAR   => sub {($self->{quote_char}, $self->{quote_char})},
+    ARRAYREF => sub {@{$self->{quote_char}}},
+    UNDEF    => sub {()},
+   });
+  not @other
+      or puke "quote_char must be an arrayref of 2 values";
 
-  my $qref = ref $_[0]->{quote_char};
-  my ($l, $r);
-  if (!$qref) {
-    ($l, $r) = ( $_[0]->{quote_char}, $_[0]->{quote_char} );
-  }
-  elsif ($qref eq 'ARRAY') {
-    ($l, $r) = @{$_[0]->{quote_char}};
-  }
-  else {
-    puke "Unsupported quote_char format: $_[0]->{quote_char}";
-  }
+  # no quoting if no quoting chars
+  $ql or return $label;
 
-  # parts containing * are naturally unquoted
-  return join( $_[0]->{name_sep}||'', map
-    { $_ eq '*' ? $_ : $l . $_ . $r }
-    ( $_[0]->{name_sep} ? split (/\Q$_[0]->{name_sep}\E/, $_[1] ) : $_[1] )
-  );
+  # no quoting for literal SQL
+  return $$label if ref($label) eq 'SCALAR';
+
+  # separate table / column (if applicable)
+  my $sep = $self->{name_sep} || '';
+  my @to_quote = $sep ? split /\Q$sep\E/, $label : ($label);
+
+  # do the quoting, except for "*" or for `table`.*
+  my @quoted = map { $_ eq '*' ? $_: $ql.$_.$qr} @to_quote;
+
+  # reassemble and return. 
+  return join $sep, @quoted;
 }
 
 
 # Conversion, if applicable
 sub _convert ($) {
-  #my ($self, $arg) = @_;
-  if ($_[0]->{convert}) {
-    return $_[0]->_sqlcase($_[0]->{convert}) .'(' . $_[1] . ')';
+  my ($self, $arg) = @_;
+
+# LDNOTE : modified the previous implementation below because
+# it was not consistent : the first "return" is always an array,
+# the second "return" is context-dependent. Anyway, _convert
+# seems always used with just a single argument, so make it a 
+# scalar function.
+#     return @_ unless $self->{convert};
+#     my $conv = $self->_sqlcase($self->{convert});
+#     my @ret = map { $conv.'('.$_.')' } @_;
+#     return wantarray ? @ret : $ret[0];
+  if ($self->{convert}) {
+    my $conv = $self->_sqlcase($self->{convert});
+    $arg = $conv.'('.$arg.')';
   }
-  return $_[1];
+  return $arg;
 }
 
 # And bindtype
 sub _bindtype (@) {
-  #my ($self, $col, @vals) = @_;
-  # called often - tighten code
-  return $_[0]->{bindtype} eq 'columns'
-    ? map {[$_[1], $_]} @_[2 .. $#_]
-    : @_[2 .. $#_]
-  ;
+  my $self = shift;
+  my($col, @vals) = @_;
+
+  #LDNOTE : changed original implementation below because it did not make 
+  # sense when bindtype eq 'columns' and @vals > 1.
+#  return $self->{bindtype} eq 'columns' ? [ $col, @vals ] : @vals;
+
+  return $self->{bindtype} eq 'columns' ? map {[$col, $_]} @vals : @vals;
 }
 
 # Dies if any element of @bind is not in [colname => value] format
 # if bindtype is 'columns'.
 sub _assert_bindval_matches_bindtype {
-#  my ($self, @bind) = @_;
-  my $self = shift;
+  my ($self, @bind) = @_;
+
   if ($self->{bindtype} eq 'columns') {
-    for (@_) {
-      if (!defined $_ || ref($_) ne 'ARRAY' || @$_ != 2) {
-        puke "bindtype 'columns' selected, you need to pass: [column_name => bind_value]"
+    foreach my $val (@bind) {
+      if (!defined $val || ref($val) ne 'ARRAY' || @$val != 2) {
+        die "bindtype 'columns' selected, you need to pass: [column_name => bind_value]"
       }
     }
   }
@@ -1323,9 +1003,11 @@ sub _join_sql_clauses {
 
 # Fix SQL case, if so requested
 sub _sqlcase {
+  my $self = shift;
+
   # LDNOTE: if $self->{case} is true, then it contains 'lower', so we
   # don't touch the argument ... crooked logic, but let's not change it!
-  return $_[0]->{case} ? $_[1] : uc($_[1]);
+  return $self->{case} ? $_[0] : uc($_[0]);
 }
 
 
@@ -1335,57 +1017,48 @@ sub _sqlcase {
 
 sub _refkind {
   my ($self, $data) = @_;
+  my $suffix = '';
+  my $ref;
+  my $n_steps = 0;
 
-  return 'UNDEF' unless defined $data;
-
-  # blessed objects are treated like scalars
-  my $ref = (Scalar::Util::blessed $data) ? '' : ref $data;
-
-  return 'SCALAR' unless $ref;
-
-  my $n_steps = 1;
-  while ($ref eq 'REF') {
+  while (1) {
+    # blessed objects are treated like scalars
+    $ref = (blessed $data) ? '' : ref $data;
+    $n_steps += 1 if $ref;
+    last          if $ref ne 'REF';
     $data = $$data;
-    $ref = (Scalar::Util::blessed $data) ? '' : ref $data;
-    $n_steps++ if $ref;
   }
 
-  return ($ref||'SCALAR') . ('REF' x $n_steps);
+  my $base = $ref || (defined $data ? 'SCALAR' : 'UNDEF');
+
+  return $base . ('REF' x $n_steps);
 }
+
+
 
 sub _try_refkind {
   my ($self, $data) = @_;
   my @try = ($self->_refkind($data));
   push @try, 'SCALAR_or_UNDEF' if $try[0] eq 'SCALAR' || $try[0] eq 'UNDEF';
   push @try, 'FALLBACK';
-  return \@try;
+  return @try;
 }
 
 sub _METHOD_FOR_refkind {
   my ($self, $meth_prefix, $data) = @_;
-
-  my $method;
-  for (@{$self->_try_refkind($data)}) {
-    $method = $self->can($meth_prefix."_".$_)
-      and last;
-  }
-
-  return $method || puke "cannot dispatch on '$meth_prefix' for ".$self->_refkind($data);
+  my $method = first {$_} map {$self->can($meth_prefix."_".$_)} 
+                              $self->_try_refkind($data)
+    or puke "cannot dispatch on '$meth_prefix' for ".$self->_refkind($data);
+  return $method;
 }
 
 
 sub _SWITCH_refkind {
   my ($self, $data, $dispatch_table) = @_;
 
-  my $coderef;
-  for (@{$self->_try_refkind($data)}) {
-    $coderef = $dispatch_table->{$_}
-      and last;
-  }
-
-  puke "no dispatch entry for ".$self->_refkind($data)
-    unless $coderef;
-
+  my $coderef = first {$_} map {$dispatch_table->{$_}} 
+                               $self->_try_refkind($data)
+    or puke "no dispatch entry for ".$self->_refkind($data);
   $coderef->();
 }
 
@@ -1410,7 +1083,7 @@ sub values {
     foreach my $k ( sort keys %$data ) {
         my $v = $data->{$k};
         $self->_SWITCH_refkind($v, {
-          ARRAYREF => sub {
+          ARRAYREF => sub { 
             if ($self->{array_datatypes}) { # array datatype
               push @all_bind, $self->_bindtype($k, $v);
             }
@@ -1457,7 +1130,7 @@ sub generate {
                 } elsif ($r eq 'SCALAR') {
                     # literal SQL without bind
                     push @sqlq, "$label = $$v";
-                } else {
+                } else { 
                     push @sqlq, "$label = ?";
                     push @sqlv, $self->_bindtype($k, $v);
                 }
@@ -1475,7 +1148,7 @@ sub generate {
                 } elsif ($r eq 'SCALAR') {  # literal SQL without bind
                     # embedded literal SQL
                     push @sqlq, $$v;
-                } else {
+                } else { 
                     push @sqlq, '?';
                     push @sqlv, $v;
                 }
@@ -1530,7 +1203,7 @@ SQL::Abstract - Generate SQL from Perl data structures
 
     my $sql = SQL::Abstract->new;
 
-    my($stmt, @bind) = $sql->select($source, \@fields, \%where, \@order);
+    my($stmt, @bind) = $sql->select($table, \@fields, \%where, \@order);
 
     my($stmt, @bind) = $sql->insert($table, \%fieldvals || \@values);
 
@@ -1598,14 +1271,14 @@ These are then used directly in your DBI code:
 
 If your database has array types (like for example Postgres),
 activate the special option C<< array_datatypes => 1 >>
-when creating the C<SQL::Abstract> object.
+when creating the C<SQL::Abstract> object. 
 Then you may use an arrayref to insert and update database array types:
 
     my $sql = SQL::Abstract->new(array_datatypes => 1);
     my %data = (
         planets => [qw/Mercury Venus Earth Mars/]
     );
-
+  
     my($stmt, @bind) = $sql->insert('solar_system', \%data);
 
 This results in:
@@ -1625,7 +1298,7 @@ say something like this:
     my %data = (
         name => 'Bill',
         date_entered => \["to_date(?,'MM/DD/YYYY')", "03/02/2003"],
-    );
+    ); 
 
 The first value in the array is the actual SQL. Any other values are
 optional and would be included in the bind values array. This gives
@@ -1633,7 +1306,7 @@ you:
 
     my($stmt, @bind) = $sql->insert('people', \%data);
 
-    $stmt = "INSERT INTO people (name, date_entered)
+    $stmt = "INSERT INTO people (name, date_entered) 
                 VALUES (?, to_date(?,'MM/DD/YYYY'))";
     @bind = ('Bill', '03/02/2003');
 
@@ -1680,7 +1353,7 @@ Easy, eh?
 
 The functions are simple. There's one for each major SQL operation,
 and a constructor you use first. The arguments are specified in a
-similar order to each function (table, then fields, then a where
+similar order to each function (table, then fields, then a where 
 clause) to try and simplify things.
 
 
@@ -1719,7 +1392,7 @@ C<cmp> to C<like> you would get SQL such as:
 
     WHERE name like 'nwiger' AND email like 'nate@wiger.org'
 
-You can also override the comparison on an individual basis - see
+You can also override the comparsion on an individual basis - see
 the huge section on L</"WHERE CLAUSES"> at the bottom.
 
 =item sqltrue, sqlfalse
@@ -1737,8 +1410,8 @@ for arrays, and "and" for hashes. This means that a WHERE
 array of the form:
 
     @where = (
-        event_date => {'>=', '2/13/99'},
-        event_date => {'<=', '4/24/03'},
+        event_date => {'>=', '2/13/99'}, 
+        event_date => {'<=', '4/24/03'}, 
     );
 
 will generate SQL like this:
@@ -1757,7 +1430,7 @@ Which will change the above C<WHERE> to:
 The logic can also be changed locally by inserting
 a modifier in front of an arrayref :
 
-    @where = (-and => [event_date => {'>=', '2/13/99'},
+    @where = (-and => [event_date => {'>=', '2/13/99'}, 
                        event_date => {'<=', '4/24/03'} ]);
 
 See the L</"WHERE CLAUSES"> section for explanations.
@@ -1835,7 +1508,7 @@ will expect the bind values in this format.
 =item quote_char
 
 This is the character that a table or column name will be quoted
-with.  By default this is an empty string, but you could set it to
+with.  By default this is an empty string, but you could set it to 
 the character C<`>, to generate SQL like this:
 
   SELECT `a_field` FROM `a_table` WHERE `some_field` LIKE '%someval%'
@@ -1847,7 +1520,7 @@ that generates SQL like this:
 
   SELECT [a_field] FROM [a_table] WHERE [some_field] LIKE '%someval%'
 
-Quoting is useful if you have tables or columns names that are reserved
+Quoting is useful if you have tables or columns names that are reserved 
 words in your database's SQL dialect.
 
 =item name_sep
@@ -1858,24 +1531,10 @@ so that tables and column names can be individually quoted like this:
 
   SELECT `table`.`one_field` FROM `table` WHERE `table`.`other_field` = 1
 
-=item injection_guard
-
-A regular expression C<qr/.../> that is applied to any C<-function> and unquoted
-column name specified in a query structure. This is a safety mechanism to avoid
-injection attacks when mishandling user input e.g.:
-
-  my %condition_as_column_value_pairs = get_values_from_user();
-  $sqla->select( ... , \%condition_as_column_value_pairs );
-
-If the expression matches an exception is thrown. Note that literal SQL
-supplied via C<\'...'> or C<\['...']> is B<not> checked in any way.
-
-Defaults to checking for C<;> and the C<GO> keyword (TransactSQL)
-
 =item array_datatypes
 
-When this option is true, arrayrefs in INSERT or UPDATE are
-interpreted as array datatypes and are passed directly
+When this option is true, arrayrefs in INSERT or UPDATE are 
+interpreted as array datatypes and are passed directly 
 to the DBI layer.
 When this option is false, arrayrefs are interpreted
 as literal SQL, just like refs to arrayrefs
@@ -1886,21 +1545,15 @@ for literal SQL).
 
 =item special_ops
 
-Takes a reference to a list of "special operators"
+Takes a reference to a list of "special operators" 
 to extend the syntax understood by L<SQL::Abstract>.
 See section L</"SPECIAL OPERATORS"> for details.
-
-=item unary_ops
-
-Takes a reference to a list of "unary operators"
-to extend the syntax understood by L<SQL::Abstract>.
-See section L</"UNARY OPERATORS"> for details.
 
 
 
 =back
 
-=head2 insert($table, \@values || \%fieldvals, \%options)
+=head2 insert($table, \@values || \%fieldvals)
 
 This is the simplest function. You simply give it a table name
 and either an arrayref of values or hashref of field/value pairs.
@@ -1908,23 +1561,6 @@ It returns an SQL INSERT statement and a list of bind values.
 See the sections on L</"Inserting and Updating Arrays"> and
 L</"Inserting and Updating SQL"> for information on how to insert
 with those data types.
-
-The optional C<\%options> hash reference may contain additional
-options to generate the insert SQL. Currently supported options
-are:
-
-=over 4
-
-=item returning
-
-Takes either a scalar of raw SQL fields, or an array reference of
-field names, and adds on an SQL C<RETURNING> statement at the end.
-This allows you to return data generated by the insert statement
-(such as row IDs) without performing another C<SELECT> statement.
-Note, however, this is not part of the SQL standard and may not
-be supported by all database engines.
-
-=back
 
 =head2 update($table, \%fieldvals, \%where)
 
@@ -1937,14 +1573,14 @@ with those data types.
 
 =head2 select($source, $fields, $where, $order)
 
-This returns a SQL SELECT statement and associated list of bind values, as
+This returns a SQL SELECT statement and associated list of bind values, as 
 specified by the arguments  :
 
 =over
 
 =item $source
 
-Specification of the 'FROM' part of the statement.
+Specification of the 'FROM' part of the statement. 
 The argument can be either a plain scalar (interpreted as a table
 name, will be quoted), or an arrayref (interpreted as a list
 of table names, joined by commas, quoted), or a scalarref
@@ -1953,25 +1589,25 @@ of table names, joined by commas, quoted), or a scalarref
 
 =item $fields
 
-Specification of the list of fields to retrieve from
+Specification of the list of fields to retrieve from 
 the source.
 The argument can be either an arrayref (interpreted as a list
-of field names, will be joined by commas and quoted), or a
+of field names, will be joined by commas and quoted), or a 
 plain scalar (literal SQL, not quoted).
-Please observe that this API is not as flexible as that of
-the first argument C<$source>, for backwards compatibility reasons.
+Please observe that this API is not as flexible as for
+the first argument C<$table>, for backwards compatibility reasons.
 
 =item $where
 
 Optional argument to specify the WHERE part of the query.
 The argument is most often a hashref, but can also be
-an arrayref or plain scalar --
+an arrayref or plain scalar -- 
 see section L<WHERE clause|/"WHERE CLAUSES"> for details.
 
 =item $order
 
 Optional argument to specify the ORDER BY part of the query.
-The argument can be a scalar, a hashref or an arrayref
+The argument can be a scalar, a hashref or an arrayref 
 -- see section L<ORDER BY clause|/"ORDER BY CLAUSES">
 for details.
 
@@ -2032,6 +1668,9 @@ Might give you:
 You get the idea. Strings get their case twiddled, but everything
 else remains verbatim.
 
+
+
+
 =head1 WHERE CLAUSES
 
 =head2 Introduction
@@ -2073,33 +1712,12 @@ an arrayref:
     );
 
 This simple code will create the following:
-
+    
     $stmt = "WHERE user = ? AND ( status = ? OR status = ? OR status = ? )";
     @bind = ('nwiger', 'assigned', 'in-progress', 'pending');
 
-A field associated to an empty arrayref will be considered a
+A field associated to an empty arrayref will be considered a 
 logical false and will generate 0=1.
-
-=head2 Tests for NULL values
-
-If the value part is C<undef> then this is converted to SQL <IS NULL>
-
-    my %where  = (
-        user   => 'nwiger',
-        status => undef,
-    );
-
-becomes:
-
-    $stmt = "WHERE user = ? AND status IS NULL";
-    @bind = ('nwiger');
-
-To test if a column IS NOT NULL:
-
-    my %where  = (
-        user   => 'nwiger',
-        status => { '!=', undef },
-    );
 
 =head2 Specific comparison operators
 
@@ -2147,13 +1765,13 @@ To get an OR instead, you can combine it with the arrayref idea:
 
     my %where => (
          user => 'nwiger',
-         priority => [ { '=', 2 }, { '>', 5 } ]
+         priority => [ {'=', 2}, {'!=', 1} ]
     );
 
 Which would generate:
 
-    $stmt = "WHERE ( priority = ? OR priority > ? ) AND user = ?";
-    @bind = ('2', '5', 'nwiger');
+    $stmt = "WHERE user = ? AND priority = ? OR priority != ?";
+    @bind = ('nwiger', '2', '1');
 
 If you want to include literal SQL (with or without bind values), just use a
 scalar reference or array reference as the value:
@@ -2184,7 +1802,7 @@ Because, in Perl you I<can't> do this:
 As the second C<!=> key will obliterate the first. The solution
 is to use the special C<-modifier> form inside an arrayref:
 
-    priority => [ -and => {'!=', 2},
+    priority => [ -and => {'!=', 2}, 
                           {'!=', 1} ]
 
 
@@ -2225,36 +1843,16 @@ Which would generate:
     $stmt = "WHERE status = ? AND reportid IN (?,?,?)";
     @bind = ('completed', '567', '2335', '2');
 
-The reverse operator C<-not_in> generates SQL C<NOT IN> and is used in
+The reverse operator C<-not_in> generates SQL C<NOT IN> and is used in 
 the same way.
 
 If the argument to C<-in> is an empty array, 'sqlfalse' is generated
 (by default : C<1=0>). Similarly, C<< -not_in => [] >> generates
 'sqltrue' (by default : C<1=1>).
 
-In addition to the array you can supply a chunk of literal sql or
-literal sql with bind:
 
-    my %where = {
-      customer => { -in => \[
-        'SELECT cust_id FROM cust WHERE balance > ?',
-        2000,
-      ],
-      status => { -in => \'SELECT status_codes FROM states' },
-    };
 
-would generate:
-
-    $stmt = "WHERE (
-          customer IN ( SELECT cust_id FROM cust WHERE balance > ? )
-      AND status IN ( SELECT status_codes FROM states )
-    )";
-    @bind = ('2000');
-
-Finally, if the argument to C<-in> is not a reference, it will be
-treated as a single-element array.
-
-Another pair of operators is C<-between> and C<-not_between>,
+Another pair of operators is C<-between> and C<-not_between>, 
 used with an arrayref of two values:
 
     my %where  = (
@@ -2268,69 +1866,8 @@ Would give you:
 
     WHERE user = ? AND completion_date NOT BETWEEN ( ? AND ? )
 
-Just like with C<-in> all plausible combinations of literal SQL
-are possible:
-
-    my %where = {
-      start0 => { -between => [ 1, 2 ] },
-      start1 => { -between => \["? AND ?", 1, 2] },
-      start2 => { -between => \"lower(x) AND upper(y)" },
-      start3 => { -between => [
-        \"lower(x)",
-        \["upper(?)", 'stuff' ],
-      ] },
-    };
-
-Would give you:
-
-    $stmt = "WHERE (
-          ( start0 BETWEEN ? AND ?                )
-      AND ( start1 BETWEEN ? AND ?                )
-      AND ( start2 BETWEEN lower(x) AND upper(y)  )
-      AND ( start3 BETWEEN lower(x) AND upper(?)  )
-    )";
-    @bind = (1, 2, 1, 2, 'stuff');
-
-
-These are the two builtin "special operators"; but the
+These are the two builtin "special operators"; but the 
 list can be expanded : see section L</"SPECIAL OPERATORS"> below.
-
-=head2 Unary operators: bool
-
-If you wish to test against boolean columns or functions within your
-database you can use the C<-bool> and C<-not_bool> operators. For
-example to test the column C<is_user> being true and the column
-C<is_enabled> being false you would use:-
-
-    my %where  = (
-        -bool       => 'is_user',
-        -not_bool   => 'is_enabled',
-    );
-
-Would give you:
-
-    WHERE is_user AND NOT is_enabled
-
-If a more complex combination is required, testing more conditions,
-then you should use the and/or operators:-
-
-    my %where  = (
-        -and           => [
-            -bool      => 'one',
-            -not_bool  => { two=> { -rlike => 'bar' } },
-            -not_bool  => { three => [ { '=', 2 }, { '>', 5 } ] },
-        ],
-    );
-
-Would give you:
-
-    WHERE
-      one
-        AND
-      (NOT two RLIKE ?)
-        AND
-      (NOT ( three = ? OR three > ? ))
-
 
 =head2 Nested conditions, -and/-or prefixes
 
@@ -2356,27 +1893,43 @@ This data structure would create the following:
     @bind = ('nwiger', 'pending', 'dispatched', 'robot', 'unassigned');
 
 
-Clauses in hashrefs or arrayrefs can be prefixed with an C<-and> or C<-or>
-to change the logic inside :
+There is also a special C<-nest>
+operator which adds an additional set of parens, to create a subquery.
+For example, to get something like this:
+
+    $stmt = "WHERE user = ? AND ( workhrs > ? OR geo = ? )";
+    @bind = ('nwiger', '20', 'ASIA');
+
+You would do:
+
+    my %where = (
+         user => 'nwiger',
+        -nest => [ workhrs => {'>', 20}, geo => 'ASIA' ],
+    );
+
+
+Finally, clauses in hashrefs or arrayrefs can be
+prefixed with an C<-and> or C<-or> to change the logic
+inside :
 
     my @where = (
          -and => [
             user => 'nwiger',
-            [
-                -and => [ workhrs => {'>', 20}, geo => 'ASIA' ],
-                -or => { workhrs => {'<', 50}, geo => 'EURO' },
+            -nest => [
+                -and => [workhrs => {'>', 20}, geo => 'ASIA' ],
+                -and => [workhrs => {'<', 50}, geo => 'EURO' ]
             ],
         ],
     );
 
 That would yield:
 
-    WHERE ( user = ? AND (
-               ( workhrs > ? AND geo = ? )
-            OR ( workhrs < ? OR geo = ? )
-          ) )
+    WHERE ( user = ? AND 
+          ( ( workhrs > ? AND geo = ? )
+         OR ( workhrs < ? AND geo = ? ) ) )
 
-=head3 Algebraic inconsistency, for historical reasons
+
+=head2 Algebraic inconsistency, for historical reasons
 
 C<Important note>: when connecting several conditions, the C<-and->|C<-or>
 operator goes C<outside> of the nested structure; whereas when connecting
@@ -2391,103 +1944,66 @@ C<inside> the arrayref. Here is an example combining both features :
 
 yielding
 
-  WHERE ( (    ( a = ? AND b = ? )
-            OR ( c = ? OR d = ? )
+  WHERE ( (    ( a = ? AND b = ? ) 
+            OR ( c = ? OR d = ? ) 
             OR ( e LIKE ? AND e LIKE ? ) ) )
 
 This difference in syntax is unfortunate but must be preserved for
 historical reasons. So be careful : the two examples below would
 seem algebraically equivalent, but they are not
 
-  {col => [-and => {-like => 'foo%'}, {-like => '%bar'}]}
+  {col => [-and => {-like => 'foo%'}, {-like => '%bar'}]} 
   # yields : WHERE ( ( col LIKE ? AND col LIKE ? ) )
 
-  [-and => {col => {-like => 'foo%'}, {col => {-like => '%bar'}}]]
+  [-and => {col => {-like => 'foo%'}, {col => {-like => '%bar'}}]] 
   # yields : WHERE ( ( col LIKE ? OR col LIKE ? ) )
 
 
-=head2 Literal SQL and value type operators
+=head2 Literal SQL
 
-The basic premise of SQL::Abstract is that in WHERE specifications the "left
-side" is a column name and the "right side" is a value (normally rendered as
-a placeholder). This holds true for both hashrefs and arrayref pairs as you
-see in the L</WHERE CLAUSES> examples above. Sometimes it is necessary to
-alter this behavior. There are several ways of doing so.
+Finally, sometimes only literal SQL will do. If you want to include
+literal SQL verbatim, you can specify it as a scalar reference, namely:
 
-=head3 -ident
-
-This is a virtual operator that signals the string to its right side is an
-identifier (a column name) and not a value. For example to compare two
-columns you would write:
-
+    my $inn = 'is Not Null';
     my %where = (
         priority => { '<', 2 },
-        requestor => { -ident => 'submitter' },
+        requestor => \$inn
     );
 
-which creates:
+This would create:
 
-    $stmt = "WHERE priority < ? AND requestor = submitter";
+    $stmt = "WHERE priority < ? AND requestor is Not Null";
     @bind = ('2');
-
-If you are maintaining legacy code you may see a different construct as
-described in L</Deprecated usage of Literal SQL>, please use C<-ident> in new
-code.
-
-=head3 -value
-
-This is a virtual operator that signals that the construct to its right side
-is a value to be passed to DBI. This is for example necessary when you want
-to write a where clause against an array (for RDBMS that support such
-datatypes). For example:
-
-    my %where = (
-        array => { -value => [1, 2, 3] }
-    );
-
-will result in:
-
-    $stmt = 'WHERE array = ?';
-    @bind = ([1, 2, 3]);
-
-Note that if you were to simply say:
-
-    my %where = (
-        array => [1, 2, 3]
-    );
-
-the result would probably not be what you wanted:
-
-    $stmt = 'WHERE array = ? OR array = ? OR array = ?';
-    @bind = (1, 2, 3);
-
-=head3 Literal SQL
-
-Finally, sometimes only literal SQL will do. To include a random snippet
-of SQL verbatim, you specify it as a scalar reference. Consider this only
-as a last resort. Usually there is a better way. For example:
-
-    my %where = (
-        priority => { '<', 2 },
-        requestor => { -in => \'(SELECT name FROM hitmen)' },
-    );
-
-Would create:
-
-    $stmt = "WHERE priority < ? AND requestor IN (SELECT name FROM hitmen)"
-    @bind = (2);
 
 Note that in this example, you only get one bind parameter back, since
 the verbatim SQL is passed as part of the statement.
 
-=head4 CAVEAT
+Of course, just to prove a point, the above can also be accomplished
+with this:
 
-  Never use untrusted input as a literal SQL argument - this is a massive
-  security risk (there is no way to check literal snippets for SQL
-  injections and other nastyness). If you need to deal with untrusted input
-  use literal SQL with placeholders as described next.
+    my %where = (
+        priority  => { '<', 2 },
+        requestor => { '!=', undef },
+    );
 
-=head3 Literal SQL with placeholders and bind values (subqueries)
+
+TMTOWTDI.
+
+Conditions on boolean columns can be expressed in the 
+same way, passing a reference to an empty string :
+
+    my %where = (
+        priority  => { '<', 2 },
+        is_ready  => \"";
+    );
+
+which yields
+
+    $stmt = "WHERE priority < ? AND is_ready";
+    @bind = ('2');
+
+
+=head2 Literal SQL with placeholders and bind values (subqueries)
 
 If the literal SQL to be inserted has placeholders and bind values,
 use a reference to an arrayref (yes this is a double reference --
@@ -2527,17 +2043,17 @@ main SQL query. Here is a first example :
 
 This yields :
 
-  $stmt = "WHERE (foo = ? AND bar IN (SELECT c1 FROM t1
+  $stmt = "WHERE (foo = ? AND bar IN (SELECT c1 FROM t1 
                                              WHERE c2 < ? AND c3 LIKE ?))";
   @bind = (1234, 100, "foo%");
 
-Other subquery operators, like for example C<"E<gt> ALL"> or C<"NOT IN">,
+Other subquery operators, like for example C<"E<gt> ALL"> or C<"NOT IN">, 
 are expressed in the same way. Of course the C<$sub_stmt> and
-its associated bind values can be generated through a former call
+its associated bind values can be generated through a former call 
 to C<select()> :
 
   my ($sub_stmt, @sub_bind)
-     = $sql->select("t1", "c1", {c2 => {"<" => 100},
+     = $sql->select("t1", "c1", {c2 => {"<" => 100}, 
                                  c3 => {-like => "foo%"}});
   my %where = (
     foo => 1234,
@@ -2545,39 +2061,48 @@ to C<select()> :
   );
 
 In the examples above, the subquery was used as an operator on a column;
-but the same principle also applies for a clause within the main C<%where>
+but the same principle also applies for a clause within the main C<%where> 
 hash, like an EXISTS subquery :
 
-  my ($sub_stmt, @sub_bind)
+  my ($sub_stmt, @sub_bind) 
      = $sql->select("t1", "*", {c1 => 1, c2 => \"> t0.c0"});
-  my %where = ( -and => [
+  my %where = (
     foo   => 1234,
-    \["EXISTS ($sub_stmt)" => @sub_bind],
-  ]);
+    -nest => \["EXISTS ($sub_stmt)" => @sub_bind],
+  );
 
 which yields
 
-  $stmt = "WHERE (foo = ? AND EXISTS (SELECT * FROM t1
+  $stmt = "WHERE (foo = ? AND EXISTS (SELECT * FROM t1 
                                         WHERE c1 = ? AND c2 > t0.c0))";
   @bind = (1234, 1);
 
 
-Observe that the condition on C<c2> in the subquery refers to
-column C<t0.c0> of the main query : this is I<not> a bind
-value, so we have to express it through a scalar ref.
+Observe that the condition on C<c2> in the subquery refers to 
+column C<t0.c0> of the main query : this is I<not> a bind 
+value, so we have to express it through a scalar ref. 
 Writing C<< c2 => {">" => "t0.c0"} >> would have generated
 C<< c2 > ? >> with bind value C<"t0.c0"> ... not exactly
 what we wanted here.
 
+Another use of the subquery technique is when some SQL clauses need
+parentheses, as it often occurs with some proprietary SQL extensions
+like for example fulltext expressions, geospatial expressions, 
+NATIVE clauses, etc. Here is an example of a fulltext query in MySQL :
+
+  my %where = (
+    -nest => \["MATCH (col1, col2) AGAINST (?)" => qw/apples/]
+  );
+
 Finally, here is an example where a subquery is used
 for expressing unary negation:
 
-  my ($sub_stmt, @sub_bind)
+  my ($sub_stmt, @sub_bind) 
      = $sql->where({age => [{"<" => 10}, {">" => 20}]});
   $sub_stmt =~ s/^ where //i; # don't want "WHERE" in the subclause
   my %where = (
         lname  => {like => '%son%'},
-        \["NOT ($sub_stmt)" => @sub_bind],
+        -nest  => \["NOT ($sub_stmt)" => @sub_bind],
     );
 
 This yields
@@ -2585,47 +2110,7 @@ This yields
   $stmt = "lname LIKE ? AND NOT ( age < ? OR age > ? )"
   @bind = ('%son%', 10, 20)
 
-=head3 Deprecated usage of Literal SQL
 
-Below are some examples of archaic use of literal SQL. It is shown only as
-reference for those who deal with legacy code. Each example has a much
-better, cleaner and safer alternative that users should opt for in new code.
-
-=over
-
-=item *
-
-    my %where = ( requestor => \'IS NOT NULL' )
-
-    $stmt = "WHERE requestor IS NOT NULL"
-
-This used to be the way of generating NULL comparisons, before the handling
-of C<undef> got formalized. For new code please use the superior syntax as
-described in L</Tests for NULL values>.
-
-=item *
-
-    my %where = ( requestor => \'= submitter' )
-
-    $stmt = "WHERE requestor = submitter"
-
-This used to be the only way to compare columns. Use the superior L</-ident>
-method for all new code. For example an identifier declared in such a way
-will be properly quoted if L</quote_char> is properly set, while the legacy
-form will remain as supplied.
-
-=item *
-
-    my %where = ( is_ready  => \"", completed => { '>', '2012-12-21' } )
-
-    $stmt = "WHERE completed > ? AND is_ready"
-    @bind = ('2012-12-21')
-
-Using an empty string literal used to be the only way to express a boolean.
-For all new code please use the much more readable
-L<-bool|/Unary operators: bool> operator.
-
-=back
 
 =head2 Conclusion
 
@@ -2642,9 +2127,12 @@ knew everything ahead of time, you wouldn't have to worry about
 dynamically-generating SQL and could just hardwire it into your
 script.
 
+
+
+
 =head1 ORDER BY CLAUSES
 
-Some functions take an order by clause. This can either be a scalar (just a
+Some functions take an order by clause. This can either be a scalar (just a 
 column name,) a hash of C<< { -desc => 'col' } >> or C<< { -asc => 'col' } >>,
 or an array of either of the two previous forms. Examples:
 
@@ -2663,7 +2151,7 @@ or an array of either of the two previous forms. Examples:
                                 |
     ['colA', {-asc => 'colB'}]  | ORDER BY colA, colB ASC
                                 |
-    { -asc => [qw/colA colB/] } | ORDER BY colA ASC, colB ASC
+    { -asc => [qw/colA colB] }  | ORDER BY colA ASC, colB ASC
                                 |
     [                           |
       { -asc => 'colA' },       | ORDER BY colA ASC, colB DESC,
@@ -2690,9 +2178,9 @@ or an array of either of the two previous forms. Examples:
      },
    ]);
 
-A "special operator" is a SQL syntactic clause that can be
+A "special operator" is a SQL syntactic clause that can be 
 applied to a field, instead of a usual binary operator.
-For example :
+For example : 
 
    WHERE field IN (?, ?, ?)
    WHERE field BETWEEN ? AND ?
@@ -2736,13 +2224,13 @@ When supplied with a coderef, it is called as:
 
 =back
 
-For example, here is an implementation
+For example, here is an implementation 
 of the MATCH .. AGAINST syntax for MySQL
 
   my $sqlmaker = SQL::Abstract->new(special_ops => [
-
+  
     # special op for MySql MATCH (field) AGAINST(word1, word2, ...)
-    {regex => qr/^match$/i,
+    {regex => qr/^match$/i, 
      handler => sub {
        my ($self, $field, $op, $arg) = @_;
        $arg = [$arg] if not ref $arg;
@@ -2755,61 +2243,8 @@ of the MATCH .. AGAINST syntax for MySQL
        return ($sql, @bind);
        }
      },
-
+  
   ]);
-
-
-=head1 UNARY OPERATORS
-
-  my $sqlmaker = SQL::Abstract->new(unary_ops => [
-     {
-      regex => qr/.../,
-      handler => sub {
-        my ($self, $op, $arg) = @_;
-        ...
-      },
-     },
-     {
-      regex => qr/.../,
-      handler => 'method_name',
-     },
-   ]);
-
-A "unary operator" is a SQL syntactic clause that can be
-applied to a field - the operator goes before the field
-
-You can write your own operator handlers - supply a C<unary_ops>
-argument to the C<new> method. That argument takes an arrayref of
-operator definitions; each operator definition is a hashref with two
-entries:
-
-=over
-
-=item regex
-
-the regular expression to match the operator
-
-=item handler
-
-Either a coderef or a plain scalar method name. In both cases
-the expected return is C<< $sql >>.
-
-When supplied with a method name, it is simply called on the
-L<SQL::Abstract/> object as:
-
- $self->$method_name ($op, $arg)
-
- Where:
-
-  $op is the part that matched the handler regex
-  $arg is the RHS or argument of the operator
-
-When supplied with a coderef, it is called as:
-
- $coderef->($self, $op, $arg)
-
-
-=back
 
 
 =head1 PERFORMANCE
@@ -2837,12 +2272,6 @@ the same structure, you only have to generate the SQL the first time
 around. On subsequent queries, simply use the C<values> function provided
 by this module to return your values in the correct order.
 
-However this depends on the values having the same type - if, for
-example, the values of a where clause may either have values
-(resulting in sql of the form C<column = ?> with a single bind
-value), or alternatively the values might be C<undef> (resulting in
-sql of the form C<column IS NULL> with no bind value) then the
-caching technique suggested will not work.
 
 =head1 FORMBUILDER
 
@@ -2851,9 +2280,6 @@ really like this part (I do, at least). Building up a complex query
 can be as simple as the following:
 
     #!/usr/bin/perl
-
-    use warnings;
-    use strict;
 
     use CGI::FormBuilder;
     use SQL::Abstract;
@@ -2872,36 +2298,27 @@ query, but the point is that if you make your form look like your
 table, the actual query script can be extremely simplistic.
 
 If you're B<REALLY> lazy (I am), check out C<HTML::QuickTable> for
-a fast interface to returning and formatting data. I frequently
+a fast interface to returning and formatting data. I frequently 
 use these three modules together to write complex database query
 apps in under 50 lines.
 
-=head1 REPO
-
-=over
-
-=item * gitweb: L<http://git.shadowcat.co.uk/gitweb/gitweb.cgi?p=dbsrgits/SQL-Abstract.git>
-
-=item * git: L<git://git.shadowcat.co.uk/dbsrgits/SQL-Abstract.git>
-
-=back
 
 =head1 CHANGES
 
 Version 1.50 was a major internal refactoring of C<SQL::Abstract>.
 Great care has been taken to preserve the I<published> behavior
 documented in previous versions in the 1.* family; however,
-some features that were previously undocumented, or behaved
+some features that were previously undocumented, or behaved 
 differently from the documentation, had to be changed in order
 to clarify the semantics. Hence, client code that was relying
-on some dark areas of C<SQL::Abstract> v1.*
+on some dark areas of C<SQL::Abstract> v1.* 
 B<might behave differently> in v1.50.
 
 The main changes are :
 
 =over
 
-=item *
+=item * 
 
 support for literal SQL through the C<< \ [$sql, bind] >> syntax.
 
@@ -2917,7 +2334,7 @@ support for the { operator => \["...", @bind] } construct (to embed literal SQL 
 
 optional support for L<array datatypes|/"Inserting and Updating Arrays">
 
-=item *
+=item * 
 
 defensive programming : check arguments
 
@@ -2935,7 +2352,7 @@ as C<< "(cond1 AND cond2) OR (cond3 OR cond4)" >>.
 
 fixed semantics of  _bindtype on array args
 
-=item *
+=item * 
 
 dropped the C<_anoncopy> of the %where tree. No longer necessary,
 we just avoid shifting arrays within that tree.
@@ -2946,13 +2363,15 @@ dropped the C<_modlogic> function
 
 =back
 
+
+
 =head1 ACKNOWLEDGEMENTS
 
 There are a number of individuals that have really helped out with
 this module. Unfortunately, most of them submitted bugs via CPAN
 so I have no idea who they are! But the people I do know are:
 
-    Ash Berlin (order_by hash term support)
+    Ash Berlin (order_by hash term support) 
     Matt Trout (DBIx::Class support)
     Mark Stosberg (benchmarking)
     Chas Owens (initial "IN" operator support)
@@ -2961,10 +2380,9 @@ so I have no idea who they are! But the people I do know are:
     Mike Fragassi (enhancements to "BETWEEN" and "LIKE")
     Dan Kubb (support for "quote_char" and "name_sep")
     Guillermo Roditi (patch to cleanup "IN" and "BETWEEN", fix and tests for _order_by)
-    Laurent Dami (internal refactoring, extensible list of special operators, literal SQL)
+    Laurent Dami (internal refactoring, multiple -nest, extensible list of special operators, literal SQL)
     Norbert Buchmuller (support for literal SQL in hashpair, misc. fixes & tests)
     Peter Rabbitson (rewrite of SQLA::Test, misc. fixes & tests)
-    Oliver Charles (support for "RETURNING" after "INSERT")
 
 Thanks!
 
@@ -2985,9 +2403,9 @@ how to create queries.
 
 =head1 LICENSE
 
-This module is free software; you may copy this under the same
-terms as perl itself (either the GNU General Public License or
-the Artistic License)
+This module is free software; you may copy this under the terms of
+the GNU General Public License, or the Artistic License, copies of
+which should have accompanied your Perl kit.
 
 =cut
 

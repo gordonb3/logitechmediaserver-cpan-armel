@@ -1,4 +1,5 @@
-package LWP::Protocol::gopher;
+#
+# $Id: gopher.pm 8931 2006-08-11 16:44:43Z dsully $
 
 # Implementation of the gopher protocol (RFC 1436)
 #
@@ -6,6 +7,9 @@ package LWP::Protocol::gopher;
 # which in turn is a vastly modified version of Oscar's http'get()
 # dated 28/3/94 in <ftp://cui.unige.ch/PUBLIC/oscar/scripts/http.pl>
 # including contributions from Marc van Heyningen and Martijn Koster.
+#
+
+package LWP::Protocol::gopher;
 
 use strict;
 use vars qw(@ISA);
@@ -43,6 +47,8 @@ sub request
 {
     my($self, $request, $proxy, $arg, $size, $timeout) = @_;
 
+    LWP::Debug::trace('()');
+
     $size = 4096 unless $size;
 
     # check proxy
@@ -51,7 +57,7 @@ sub request
 				   'You can not proxy through the gopher');
     }
 
-    my $url = $request->uri;
+    my $url = $request->url;
     die "bad scheme" if $url->scheme ne 'gopher';
 
 
@@ -120,7 +126,6 @@ EOT
     # Ok, lets make the request
     my $socket = IO::Socket::INET->new(PeerAddr => $host,
 				       PeerPort => $port,
-				       LocalAddr => $self->{ua}{local_address},
 				       Proto    => 'tcp',
 				       Timeout  => $timeout);
     die "Can't connect to $host:$port" unless $socket;

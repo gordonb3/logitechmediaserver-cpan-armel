@@ -1,7 +1,10 @@
-package LWP::Protocol::data;
-
+#
+# $Id: data.pm 8931 2006-08-11 16:44:43Z dsully $
+#
 # Implements access to data:-URLs as specified in RFC 2397
 
+
+package LWP::Protocol::data;
 use strict;
 use vars qw(@ISA);
 
@@ -21,20 +24,20 @@ sub request
     # check proxy
     if (defined $proxy)
     {
-	return HTTP::Response->new( &HTTP::Status::RC_BAD_REQUEST,
-				  'You can not proxy with data');
+	return new HTTP::Response &HTTP::Status::RC_BAD_REQUEST,
+				  'You can not proxy with data';
     }
 
     # check method
     my $method = $request->method;
     unless ($method eq 'GET' || $method eq 'HEAD') {
-	return HTTP::Response->new( &HTTP::Status::RC_BAD_REQUEST,
+	return new HTTP::Response &HTTP::Status::RC_BAD_REQUEST,
 				  'Library does not allow method ' .
-				  "$method for 'data:' URLs");
+				  "$method for 'data:' URLs";
     }
 
-    my $url = $request->uri;
-    my $response = HTTP::Response->new( &HTTP::Status::RC_OK, "Document follows");
+    my $url = $request->url;
+    my $response = new HTTP::Response &HTTP::Status::RC_OK, "Document follows";
 
     my $media_type = $url->media_type;
 
@@ -44,9 +47,9 @@ sub request
 		      'Date'           => time2str(time),
 		      'Server'         => "libwww-perl-internal/$LWP::VERSION"
 		     );
+    $response->content($data) if $method ne "HEAD";
 
-    $data = "" if $method eq "HEAD";
-    return $self->collect_once($arg, $response, $data);
+    return $response;
 }
 
 1;

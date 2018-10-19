@@ -1,7 +1,7 @@
 # logitechmediaserver-cpan-armel
 
 #### Description
-This project contains a complete CPAN folder for logitechmediaserver 7.8.0 on armv5te with Perl 5.20.
+This project contains a complete CPAN folder for logitechmediaserver 7.8.0 on armv5te with Perl 5.20 and later.
 
 
 #### Installation
@@ -15,5 +15,11 @@ Unpack the master zip from this project and copy these folders over to your work
 Reference the `Tarball Notes` in Installation.txt in the work folder on how to run your copy of Logitech Media Server.
 
 
+#### Special Perl 5.24 note
+CPAN/arch contains two versions of architecture dependent modules for Perl 5.24.x. The second version, `5.24-pie`, was compiled with `-fPIE` for position independent execution and it is advised that you use that version if the rest of your system was compiled the same way (like in Gentoo profile 17). This requires you to swap the folder with the non-PIE `5.24` folder.
+
+It is safe to delete any unused versions from the `arch` folder.
+
+
 #### Gentoo installation
-Please reference the logitechmediaserver-bin ebuild in the [bubba overlay](https://github.com/gordonb3/bubba-overlay)
+If you haven't already, use layman to add the [bubba overlay](https://github.com/gordonb3/bubba-overlay) to your system and emerge logitechmediaserver-bin

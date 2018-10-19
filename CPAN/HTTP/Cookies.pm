@@ -1,11 +1,12 @@
 package HTTP::Cookies;
 
 use strict;
-use HTTP::Date qw(str2time parse_date time2str);
-use HTTP::Headers::Util qw(_split_header_words join_header_words);
+use HTTP::Date qw(str2time time2str);
+use HTTP::Headers::Util qw(split_header_words join_header_words);
+use LWP::Debug ();
 
 use vars qw($VERSION $EPOCH_OFFSET);
-$VERSION = "6.01";
+$VERSION = sprintf("%d.%02d", q$Revision: 1.39 $ =~ /(\d+)\.(\d+)/);
 
 # Legacy: because "use "HTTP::Cookies" used be the ONLY way
 #  to load the class HTTP::Cookies::Netscape.
@@ -39,9 +40,10 @@ sub add_cookie_header
 {
     my $self = shift;
     my $request = shift || return;
-    my $url = $request->uri;
+    my $url = $request->url;
     my $scheme = $url->scheme;
     unless ($scheme =~ /^https?\z/) {
+	LWP::Debug::debug("Will not add cookies to non-HTTP requests");
 	return;
     }
 
@@ -58,7 +60,8 @@ sub add_cookie_header
     my $netscape_only = 0; # An exact domain match applies to any cookie
 
     while ($domain =~ /\./) {
-        # Checking $domain for cookies"
+
+        LWP::Debug::debug("Checking $domain for cookies");
 	my $cookies = $self->{COOKIES}{$domain};
 	next unless $cookies;
 	if ($self->{delayload} && defined($cookies->{'//+delayload'})) {
@@ -73,23 +76,28 @@ sub add_cookie_header
 	# first (i.e. longest path first)
 	my $path;
 	for $path (sort {length($b) <=> length($a) } keys %$cookies) {
+            LWP::Debug::debug("- checking cookie path=$path");
 	    if (index($req_path, $path) != 0) {
+	        LWP::Debug::debug("  path $path:$req_path does not fit");
 		next;
 	    }
 
 	    my($key,$array);
 	    while (($key,$array) = each %{$cookies->{$path}}) {
 		my($version,$val,$port,$path_spec,$secure,$expires) = @$array;
+	        LWP::Debug::debug(" - checking cookie $key=$val");
 		if ($secure && !$secure_request) {
+		    LWP::Debug::debug("   not a secure requests");
 		    next;
 		}
 		if ($expires && $expires < $now) {
+		    LWP::Debug::debug("   expired");
 		    next;
 		}
 		if ($port) {
 		    my $found;
 		    if ($port =~ s/^_//) {
-			# The corresponding Set-Cookie attribute was empty
+			# The correponding Set-Cookie attribute was empty
 			$found++ if $port eq $req_port;
 			$port = "";
 		    }
@@ -100,12 +108,17 @@ sub add_cookie_header
 			}
 		    }
 		    unless ($found) {
+		        LWP::Debug::debug("   port $port:$req_port does not fit");
 			next;
 		    }
 		}
 		if ($version > 0 && $netscape_only) {
+		    LWP::Debug::debug("   domain $domain applies to " .
+				      "Netscape-style cookies only");
 		    next;
 		}
+
+	        LWP::Debug::debug("   it's a match");
 
 		# set version number of cookie header.
 	        # XXX: What should it be if multiple matching
@@ -160,12 +173,7 @@ sub add_cookie_header
 	}
     }
 
-    if (@cval) {
-	if (my $old = $request->header("Cookie")) {
-	    unshift(@cval, $old);
-	}
-	$request->header(Cookie => join("; ", @cval));
-    }
+    $request->header(Cookie => join("; ", @cval)) if @cval;
 
     $request;
 }
@@ -176,13 +184,13 @@ sub extract_cookies
     my $self = shift;
     my $response = shift || return;
 
-    my @set = _split_header_words($response->_header("Set-Cookie2"));
+    my @set = split_header_words($response->_header("Set-Cookie2"));
     my @ns_set = $response->_header("Set-Cookie");
 
     return $response unless @set || @ns_set;  # quick exit
 
     my $request = $response->request;
-    my $url = $request->uri;
+    my $url = $request->url;
     my $req_host = _host($request, $url);
     $req_host = "$req_host.local" unless $req_host =~ /\./;
     my $req_port = $url->port;
@@ -191,7 +199,7 @@ sub extract_cookies
 
     if (@ns_set) {
 	# The old Netscape cookie format for Set-Cookie
-	# http://curl.haxx.se/rfc/cookie_spec.html
+        # http://www.netscape.com/newsref/std/cookie_spec.html
 	# can for instance contain an unquoted "," in the expires
 	# field, so we have to use this ad-hoc parser.
 	my $now = time();
@@ -206,13 +214,11 @@ sub extract_cookies
 
 	my $set;
 	for $set (@ns_set) {
-            $set =~ s/^\s+//;
 	    my @cur;
 	    my $param;
 	    my $expires;
 	    my $first_param = 1;
 	    for $param (split(/;\s*/, $set)) {
-                next unless length($param);
 		my($k,$v) = split(/\s*=\s*/, $param, 2);
 		if (defined $v) {
 		    $v =~ s/\s+$//;
@@ -224,37 +230,16 @@ sub extract_cookies
 		}
 		if (!$first_param && lc($k) eq "expires") {
 		    my $etime = str2time($v);
-		    if (defined $etime) {
-			push(@cur, "Max-Age" => $etime - $now);
+		    if ($etime) {
+			push(@cur, "Max-Age" => str2time($v) - $now);
 			$expires++;
 		    }
-		    else {
-			# parse_date can deal with years outside the range of time_t,
-			my($year, $mon, $day, $hour, $min, $sec, $tz) = parse_date($v);
-			if ($year) {
-			    my $thisyear = (gmtime)[5] + 1900;
-			    if ($year < $thisyear) {
-				push(@cur, "Max-Age" => -1);  # any negative value will do
-				$expires++;
-			    }
-			    elsif ($year >= $thisyear + 10) {
-				# the date is at least 10 years into the future, just replace
-				# it with something approximate
-				push(@cur, "Max-Age" => 10 * 365 * 24 * 60 * 60);
-				$expires++;
-			    }
-			}
-		    }
 		}
-                elsif (!$first_param && lc($k) =~ /^(?:version|discard|ns-cookie)/) {
-                    # ignore
-                }
 		else {
 		    push(@cur, $k => $v);
 		}
 		$first_param = 0;
 	    }
-            next unless @cur;
 	    next if $in_set2{$cur[0]};
 
 #	    push(@cur, "Port" => $req_port);
@@ -272,6 +257,8 @@ sub extract_cookies
 	my $key = shift @$set;
 	my $val = shift @$set;
 
+        LWP::Debug::debug("Set cookie $key => $val");
+
 	my %hash;
 	while (@$set) {
 	    my $k = shift @$set;
@@ -283,7 +270,7 @@ sub extract_cookies
 	    if ($k eq "discard" || $k eq "secure") {
 		$v = 1 unless defined $v;
 	    }
-	    next if exists $hash{$k};  # only first value is significant
+	    next if exists $hash{$k};  # only first value is signigicant
 	    $hash{$k} = $v;
 	};
 
@@ -301,18 +288,22 @@ sub extract_cookies
 	if (defined($domain)
 	    && $domain ne $req_host && $domain ne ".$req_host") {
 	    if ($domain !~ /\./ && $domain ne "local") {
+	        LWP::Debug::debug("Domain $domain contains no dot");
 		next SET_COOKIE;
 	    }
 	    $domain = ".$domain" unless $domain =~ /^\./;
 	    if ($domain =~ /\.\d+$/) {
+	        LWP::Debug::debug("IP-address $domain illeagal as domain");
 		next SET_COOKIE;
 	    }
 	    my $len = length($domain);
 	    unless (substr($req_host, -$len) eq $domain) {
+	        LWP::Debug::debug("Domain $domain does not match host $req_host");
 		next SET_COOKIE;
 	    }
 	    my $hostpre = substr($req_host, 0, length($req_host) - $len);
 	    if ($hostpre =~ /\./ && !$ns_cookie) {
+	        LWP::Debug::debug("Host prefix contain a dot: $hostpre => $domain");
 		next SET_COOKIE;
 	    }
 	}
@@ -327,6 +318,7 @@ sub extract_cookies
 	    _normalize_path($path) if $path =~ /%/;
 	    if (!$ns_cookie &&
                 substr($req_path, 0, length($path)) ne $path) {
+	        LWP::Debug::debug("Path $path is not a prefix of $req_path");
 		next SET_COOKIE;
 	    }
 	}
@@ -344,11 +336,13 @@ sub extract_cookies
 		my $found;
 		for my $p (split(/,/, $port)) {
 		    unless ($p =~ /^\d+$/) {
+		      LWP::Debug::debug("Bad port $port (not numeric)");
 			next SET_COOKIE;
 		    }
 		    $found++ if $p eq $req_port;
 		}
 		unless ($found) {
+		    LWP::Debug::debug("Request port ($req_port) not found in $port");
 		    next SET_COOKIE;
 		}
 	    }
@@ -436,7 +430,7 @@ sub load
 	next unless s/^Set-Cookie3:\s*//;
 	chomp;
 	my $cookie;
-	for $cookie (_split_header_words($_)) {
+	for $cookie (split_header_words($_)) {
 	    my($key,$val) = splice(@$cookie, 0, 2);
 	    my %hash;
 	    while (@$cookie) {
@@ -513,7 +507,6 @@ sub clear_temporary_cookies
 sub DESTROY
 {
     my $self = shift;
-    local($., $@, $!, $^E, $?);
     $self->save if $self->{'autosave'};
 }
 
@@ -610,7 +603,7 @@ HTTP::Cookies - HTTP cookie jars
 
   use HTTP::Cookies;
   $cookie_jar = HTTP::Cookies->new(
-    file => "$ENV{'HOME'}/lwp_cookies.dat",
+    file => "$ENV{'HOME'}/lwp_cookies.dat',
     autosave => 1,
   );
 
@@ -633,7 +626,7 @@ knows about.
 Cookies are a general mechanism which server side connections can use
 to both store and retrieve information on the client side of the
 connection.  For more information about cookies refer to
-<URL:http://curl.haxx.se/rfc/cookie_spec.html> and
+<URL:http://www.netscape.com/newsref/std/cookie_spec.html> and
 <URL:http://www.cookiecentral.com/>.  This module also implements the
 new style cookies described in I<RFC 2965>.
 The two variants of cookies are supposed to be able to coexist happily.

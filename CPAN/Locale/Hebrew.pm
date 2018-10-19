@@ -1,4 +1,4 @@
-# $File: //member/autrijus/Locale-Hebrew/Hebrew.pm $ $Author: autrijus $
+# $File: //member/autrijus/Locale-Hebrew/Hebrew.pm $ $Author: dsully $
 # $Revision: #4 $ $Change: 11169 $ $DateTime: 2004/09/18 09:21:22 $
 
 package Locale::Hebrew;
@@ -7,7 +7,6 @@ use strict;
 use vars qw($VERSION @ISA @EXPORT @EXPORT_OK);
 use Exporter;
 use DynaLoader;
-use AutoLoader;
 
 @ISA = qw(Exporter DynaLoader);
 @EXPORT = @EXPORT_OK = qw(hebrewflip);

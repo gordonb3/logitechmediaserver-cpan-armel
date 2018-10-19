@@ -1,4 +1,4 @@
-# $Id$
+# $Id: DocumentLocator.pm 1097 2004-07-16 12:55:19Z dean $
 
 package XML::SAX::DocumentLocator;
 use strict;
@@ -13,14 +13,12 @@ sub new {
 
 sub TIEHASH {
     my $class = shift;
-    my ($pubmeth, $sysmeth, $linemeth, $colmeth, $encmeth, $xmlvmeth) = @_;
+    my ($pubmeth, $sysmeth, $linemeth, $colmeth) = @_;
     return bless { 
         pubmeth => $pubmeth,
         sysmeth => $sysmeth,
         linemeth => $linemeth,
         colmeth => $colmeth,
-        encmeth => $encmeth,
-        xmlvmeth => $xmlvmeth,
     }, $class;
 }
 
@@ -39,12 +37,6 @@ sub FETCH {
     elsif ($key eq 'ColumnNumber') {
         $method = $self->{colmeth};
     }
-    elsif ($key eq 'Encoding') {
-        $method = $self->{encmeth};
-    }
-    elsif ($key eq 'XMLVersion') {
-        $method = $self->{xmlvmeth};
-    }
     if ($method) {
         my $value = $method->($key);
         return $value;
@@ -54,7 +46,7 @@ sub FETCH {
 
 sub EXISTS {
     my ($self, $key) = @_;
-    if ($key =~ /^(PublicId|SystemId|LineNumber|ColumnNumber|Encoding|XMLVersion)$/) {
+    if ($key =~ /^(PublicId|SystemId|LineNumber|ColumnNumber)$/) {
         return 1;
     }
     return 0;
@@ -80,8 +72,6 @@ sub FIRSTKEY {
         SystemId => 1,
         LineNumber => 1,
         ColumnNumber => 1,
-        Encoding => 1,
-        XMLVersion => 1,
     };
     return each %{$self->{keys}};
 }
@@ -105,8 +95,6 @@ XML::SAX::DocumentLocator - Helper class for document locators
       sub { $object->get_system_id },
       sub { $reader->current_line },
       sub { $reader->current_column },
-      sub { $reader->get_encoding },
-      sub { $reader->get_xml_version },
   );
 
 =head1 DESCRIPTION
@@ -124,8 +112,7 @@ code for XML::SAX::PurePerl for a usage example.
 
 There is only 1 method: C<new>. Simply pass it a list of
 closures that when called will return the PublicId, the
-SystemId, the LineNumber, the ColumnNumber, the Encoding 
-and the XMLVersion respectively.
+SystemId, the LineNumber and the ColumnNumber, respectively.
 
 The closures are passed a single parameter, the key being
 requested. But you're free to ignore that.

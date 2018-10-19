@@ -3,9 +3,9 @@ use strict;
 use Exporter;
 use vars qw/$VERSION @ISA @EXPORT_OK
             $strict_leading_dot $strict_wildcard_slash/;
-$VERSION = '0.09';
+$VERSION = '0.06';
 @ISA = 'Exporter';
-@EXPORT_OK = qw( glob_to_regex glob_to_regex_string match_glob );
+@EXPORT_OK = qw( glob_to_regex match_glob );
 
 $strict_leading_dot    = 1;
 $strict_wildcard_slash = 1;
@@ -13,13 +13,6 @@ $strict_wildcard_slash = 1;
 use constant debug => 0;
 
 sub glob_to_regex {
-    my $glob = shift;
-    my $regex = glob_to_regex_string($glob);
-    return qr/^$regex$/;
-}
-
-sub glob_to_regex_string
-{
     my $glob = shift;
     my ($regex, $in_curlies, $escaping);
     local $_;
@@ -35,7 +28,7 @@ sub glob_to_regex_string
             $first_byte = 1;
         }
         if ($_ eq '.' || $_ eq '(' || $_ eq ')' || $_ eq '|' ||
-            $_ eq '+' || $_ eq '^' || $_ eq '$' || $_ eq '@' || $_ eq '%' ) {
+            $_ eq '+' || $_ eq '^' || $_ eq '$' ) {
             $regex .= "\\$_";
         }
         elsif ($_ eq '*') {
@@ -74,8 +67,7 @@ sub glob_to_regex_string
         $escaping = 0;
     }
     print "# $glob $regex\n" if debug;
-
-    return $regex;
+    qr/^$regex$/;
 }
 
 sub match_glob {
@@ -121,12 +113,7 @@ Returns the list of things which match the glob from the source list.
 
 =item glob_to_regex( $glob )
 
-Returns a compiled regex which is the equivalent of the globbing
-pattern.
-
-=item glob_to_regex_string( $glob )
-
-Returns a regex string which is the equivalent of the globbing
+Returns a compiled regex which is the equiavlent of the globbing
 pattern.
 
 =back
@@ -143,7 +130,7 @@ C<a*> matches C<a>, C<aa>, C<aaaa> and many many more.
 
 =item C<?> - match exactly one character
 
-C<a?> matches C<aa>, but not C<a>, or C<aaa>
+C<a?> matches C<aa>, but not C<a>, or C<aa>
 
 =item Character sets/ranges
 
@@ -183,7 +170,7 @@ Richard Clamp <richardc@unixbeard.net>
 
 =head1 COPYRIGHT
 
-Copyright (C) 2002, 2003, 2006, 2007 Richard Clamp.  All Rights Reserved.
+Copyright (C) 2002 Richard Clamp.  All Rights Reserved.
 
 This module is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.

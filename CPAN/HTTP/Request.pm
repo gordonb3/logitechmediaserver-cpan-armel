@@ -1,11 +1,14 @@
 package HTTP::Request;
 
+# $Id: Request.pm 8931 2006-08-11 16:44:43Z dsully $
+
+require HTTP::Message;
+@ISA = qw(HTTP::Message);
+$VERSION = sprintf("%d.%02d", q$Revision: 1.40 $ =~ /(\d+)\.(\d+)/);
+
 use strict;
-use warnings;
 
-use base 'HTTP::Message';
 
-our $VERSION = "6.11";
 
 sub new
 {
@@ -79,25 +82,12 @@ sub uri
 	    $uri = $HTTP::URI_CLASS->new($uri);
 	}
 	$self->{'_uri'} = $uri;
-        delete $self->{'_uri_canonical'};
     }
     $old;
 }
 
 *url = \&uri;  # legacy
 
-sub uri_canonical
-{
-    my $self = shift;
-    return $self->{'_uri_canonical'} ||= $self->{'_uri'}->canonical;
-}
-
-
-sub accept_decodable
-{
-    my $self = shift;
-    $self->header("Accept-Encoding", scalar($self->decodable));
-}
 
 sub as_string
 {
@@ -113,20 +103,6 @@ sub as_string
     $req_line .= " $proto" if $proto;
 
     return join($eol, $req_line, $self->SUPER::as_string(@_));
-}
-
-sub dump
-{
-    my $self = shift;
-    my @pre = ($self->method || "-", $self->uri || "-");
-    if (my $prot = $self->protocol) {
-	push(@pre, $prot);
-    }
-
-    return $self->SUPER::dump(
-        preheader => join(" ", @pre),
-	@_,
-    );
 }
 
 
@@ -191,7 +167,7 @@ short string like "GET", "HEAD", "PUT" or "POST".
 
 This is used to get/set the uri attribute.  The $val can be a
 reference to a URI object or a plain string.  If a string is given,
-then it should be parsable as an absolute URI.
+then it should be parseable as an absolute URI.
 
 =item $r->header( $field )
 
@@ -202,14 +178,9 @@ C<HTTP::Headers> via C<HTTP::Message>.  See L<HTTP::Headers> for
 details and other similar methods that can be used to access the
 headers.
 
-=item $r->accept_decodable
-
-This will set the C<Accept-Encoding> header to the list of encodings
-that decoded_content() can decode.
-
 =item $r->content
 
-=item $r->content( $bytes )
+=item $r->content( $content )
 
 This is used to get/set the content and it is inherited from the
 C<HTTP::Message> base class.  See L<HTTP::Message> for details and

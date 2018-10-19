@@ -3,20 +3,8 @@ package File::Spec::Unix;
 use strict;
 use vars qw($VERSION);
 
-$VERSION = '3.48_01';
-my $xs_version = $VERSION;
-$VERSION =~ tr/_//;
-
-unless (defined &canonpath) {
-  eval {
-    if ( $] >= 5.006 ) {
-	require XSLoader;
-	XSLoader::load("Cwd", $xs_version);
-    } else {
-	require Cwd;
-    }
-  };
-}
+$VERSION = '3.30';
+$VERSION = eval $VERSION;
 
 =head1 NAME
 
@@ -52,7 +40,7 @@ actually traverse the filesystem cleaning up paths like this.
 
 =cut
 
-sub _pp_canonpath {
+sub canonpath {
     my ($self,$path) = @_;
     return unless defined $path;
     
@@ -81,7 +69,6 @@ sub _pp_canonpath {
     $path =~ s|/\z|| unless $path eq "/";          # xx/       -> xx
     return "$node$path";
 }
-*canonpath = \&_pp_canonpath unless defined &canonpath;
 
 =item catdir()
 
@@ -93,12 +80,11 @@ trailing slash :-)
 
 =cut
 
-sub _pp_catdir {
+sub catdir {
     my $self = shift;
 
     $self->canonpath(join('/', @_, '')); # '' because need a trailing '/'
 }
-*catdir = \&_pp_catdir unless defined &catdir;
 
 =item catfile
 
@@ -107,7 +93,7 @@ complete path ending with a filename
 
 =cut
 
-sub _pp_catfile {
+sub catfile {
     my $self = shift;
     my $file = $self->canonpath(pop @_);
     return $file unless @_;
@@ -115,7 +101,6 @@ sub _pp_catfile {
     $dir .= "/" unless substr($dir,-1) eq "/";
     return $dir.$file;
 }
-*catfile = \&_pp_catfile unless defined &catfile;
 
 =item curdir
 
@@ -124,7 +109,6 @@ Returns a string representation of the current directory.  "." on UNIX.
 =cut
 
 sub curdir { '.' }
-use constant _fn_curdir => ".";
 
 =item devnull
 
@@ -133,7 +117,6 @@ Returns a string representation of the null device. "/dev/null" on UNIX.
 =cut
 
 sub devnull { '/dev/null' }
-use constant _fn_devnull => "/dev/null";
 
 =item rootdir
 
@@ -142,7 +125,6 @@ Returns a string representation of the root directory.  "/" on UNIX.
 =cut
 
 sub rootdir { '/' }
-use constant _fn_rootdir => "/";
 
 =item tmpdir
 
@@ -153,38 +135,23 @@ writable:
     $ENV{TMPDIR}
     /tmp
 
-If running under taint mode, and if $ENV{TMPDIR}
+Since perl 5.8.0, if running under taint mode, and if $ENV{TMPDIR}
 is tainted, it is not used.
 
 =cut
 
-my ($tmpdir, %tmpenv);
-# Cache and return the calculated tmpdir, recording which env vars
-# determined it.
-sub _cache_tmpdir {
-    @tmpenv{@_[2..$#_]} = @ENV{@_[2..$#_]};
-    return $tmpdir = $_[1];
-}
-# Retrieve the cached tmpdir, checking first whether relevant env vars have
-# changed and invalidated the cache.
-sub _cached_tmpdir {
-    shift;
-    local $^W;
-    return if grep $ENV{$_} ne $tmpenv{$_}, @_;
-    return $tmpdir;
-}
+my $tmpdir;
 sub _tmpdir {
+    return $tmpdir if defined $tmpdir;
     my $self = shift;
     my @dirlist = @_;
-    my $taint = do { no strict 'refs'; ${"\cTAINT"} };
-    if ($taint) { # Check for taint mode on perl >= 5.8.0
-	require Scalar::Util;
-	@dirlist = grep { ! Scalar::Util::tainted($_) } @dirlist;
+    {
+	no strict 'refs';
+	if (${"\cTAINT"}) { # Check for taint mode on perl >= 5.8.0
+            require Scalar::Util;
+	    @dirlist = grep { ! Scalar::Util::tainted($_) } @dirlist;
+	}
     }
-    elsif ($] < 5.007) { # No ${^TAINT} before 5.8
-	@dirlist = grep { eval { eval('1'.substr $_,0,0) } } @dirlist;
-    }
-    
     foreach (@dirlist) {
 	next unless defined && -d && -w _;
 	$tmpdir = $_;
@@ -192,22 +159,12 @@ sub _tmpdir {
     }
     $tmpdir = $self->curdir unless defined $tmpdir;
     $tmpdir = defined $tmpdir && $self->canonpath($tmpdir);
-    if ( !$self->file_name_is_absolute($tmpdir) ) {
-        # See [perl #120593] for the full details
-        # If possible, return a full path, rather than '.' or 'lib', but
-        # jump through some hoops to avoid returning a tainted value.
-        ($tmpdir) = grep {
-            $taint     ? ! Scalar::Util::tainted($_) :
-            $] < 5.007 ? eval { eval('1'.substr $_,0,0) } : 1
-        } $self->rel2abs($tmpdir), $tmpdir;
-    }
     return $tmpdir;
 }
 
 sub tmpdir {
-    my $cached = $_[0]->_cached_tmpdir('TMPDIR');
-    return $cached if defined $cached;
-    $_[0]->_cache_tmpdir($_[0]->_tmpdir( $ENV{TMPDIR}, "/tmp" ), 'TMPDIR');
+    return $tmpdir if defined $tmpdir;
+    $tmpdir = $_[0]->_tmpdir( $ENV{TMPDIR}, "/tmp" );
 }
 
 =item updir
@@ -217,7 +174,6 @@ Returns a string representation of the parent directory.  ".." on UNIX.
 =cut
 
 sub updir { '..' }
-use constant _fn_updir => "..";
 
 =item no_upwards
 
@@ -239,7 +195,6 @@ is not or is significant when comparing file specifications.
 =cut
 
 sub case_tolerant { 0 }
-use constant _fn_case_tolerant => 0;
 
 =item file_name_is_absolute
 
@@ -283,8 +238,7 @@ sub join {
 =item splitpath
 
     ($volume,$directories,$file) = File::Spec->splitpath( $path );
-    ($volume,$directories,$file) = File::Spec->splitpath( $path,
-                                                          $no_file );
+    ($volume,$directories,$file) = File::Spec->splitpath( $path, $no_file );
 
 Splits a path into volume, directory, and filename portions. On systems
 with no concept of volume, returns '' for volume. 
@@ -394,11 +348,9 @@ directories.
 If $path is relative, it is converted to absolute form using L</rel2abs()>.
 This means that it is taken to be relative to L<cwd()|Cwd>.
 
-No checks against the filesystem are made, so the result may not be correct if
-C<$base> contains symbolic links.  (Apply
-L<Cwd::abs_path()|Cwd/abs_path> beforehand if that
-is a concern.)  On VMS, there is interaction with the working environment, as
-logicals and macros are expanded.
+No checks against the filesystem are made.  On VMS, there is
+interaction with the working environment, as logicals and
+macros are expanded.
 
 Based on code written by Shigio Yamaguchi.
 
@@ -410,32 +362,28 @@ sub abs2rel {
 
     ($path, $base) = map $self->canonpath($_), $path, $base;
 
-    my $path_directories;
-    my $base_directories;
-
     if (grep $self->file_name_is_absolute($_), $path, $base) {
 	($path, $base) = map $self->rel2abs($_), $path, $base;
-
-	my ($path_volume) = $self->splitpath($path, 1);
-	my ($base_volume) = $self->splitpath($base, 1);
-
-	# Can't relativize across volumes
-	return $path unless $path_volume eq $base_volume;
-
-	$path_directories = ($self->splitpath($path, 1))[1];
-	$base_directories = ($self->splitpath($base, 1))[1];
-
-	# For UNC paths, the user might give a volume like //foo/bar that
-	# strictly speaking has no directory portion.  Treat it as if it
-	# had the root directory for that volume.
-	if (!length($base_directories) and $self->file_name_is_absolute($base)) {
-	    $base_directories = $self->rootdir;
-	}
     }
     else {
-	my $wd= ($self->splitpath($self->_cwd(), 1))[1];
-	$path_directories = $self->catdir($wd, $path);
-	$base_directories = $self->catdir($wd, $base);
+	# save a couple of cwd()s if both paths are relative
+	($path, $base) = map $self->catdir('/', $_), $path, $base;
+    }
+
+    my ($path_volume) = $self->splitpath($path, 1);
+    my ($base_volume) = $self->splitpath($base, 1);
+
+    # Can't relativize across volumes
+    return $path unless $path_volume eq $base_volume;
+
+    my $path_directories = ($self->splitpath($path, 1))[1];
+    my $base_directories = ($self->splitpath($base, 1))[1];
+
+    # For UNC paths, the user might give a volume like //foo/bar that
+    # strictly speaking has no directory portion.  Treat it as if it
+    # had the root directory for that volume.
+    if (!length($base_directories) and $self->file_name_is_absolute($base)) {
+      $base_directories = $self->rootdir;
     }
 
     # Now, remove all leading components that are the same
@@ -443,39 +391,19 @@ sub abs2rel {
     my @basechunks = $self->splitdir( $base_directories );
 
     if ($base_directories eq $self->rootdir) {
-      return $self->curdir if $path_directories eq $self->rootdir;
       shift @pathchunks;
       return $self->canonpath( $self->catpath('', $self->catdir( @pathchunks ), '') );
     }
 
-    my @common;
     while (@pathchunks && @basechunks && $self->_same($pathchunks[0], $basechunks[0])) {
-        push @common, shift @pathchunks ;
+        shift @pathchunks ;
         shift @basechunks ;
     }
     return $self->curdir unless @pathchunks || @basechunks;
 
-    # @basechunks now contains the directories the resulting relative path 
-    # must ascend out of before it can descend to $path_directory.  If there
-    # are updir components, we must descend into the corresponding directories
-    # (this only works if they are no symlinks).
-    my @reverse_base;
-    while( defined(my $dir= shift @basechunks) ) {
-	if( $dir ne $self->updir ) {
-	    unshift @reverse_base, $self->updir;
-	    push @common, $dir;
-	}
-	elsif( @common ) {
-	    if( @reverse_base && $reverse_base[0] eq $self->updir ) {
-		shift @reverse_base;
-		pop @common;
-	    }
-	    else {
-		unshift @reverse_base, pop @common;
-	    }
-	}
-    }
-    my $result_dirs = $self->catdir( @reverse_base, @pathchunks );
+    # $base now contains the directories the resulting relative path 
+    # must ascend out of before it can descend to $path_directory.
+    my $result_dirs = $self->catdir( ($self->updir) x @basechunks, @pathchunks );
     return $self->canonpath( $self->catpath('', $result_dirs, '') );
 }
 
@@ -540,8 +468,6 @@ Copyright (c) 2004 by the Perl 5 Porters.  All rights reserved.
 
 This program is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself.
-
-Please submit bug reports and patches to perlbug@perl.org.
 
 =head1 SEE ALSO
 

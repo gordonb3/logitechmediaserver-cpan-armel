@@ -1,4 +1,4 @@
-# $Id$
+# $Id: DocType.pm 1097 2004-07-16 12:55:19Z dean $
 
 package XML::SAX::PurePerl;
 
@@ -8,9 +8,7 @@ use XML::SAX::PurePerl::Productions qw($PubidChar);
 sub doctypedecl {
     my ($self, $reader) = @_;
     
-    my $data = $reader->data(9);
-    if ($data =~ /^<!DOCTYPE/) {
-        $reader->move_along(9);
+    if ($reader->match_string('<!DOCTYPE')) {
         $self->skip_whitespace($reader) ||
             $self->parser_error("No whitespace after doctype declaration", $reader);
         
@@ -27,7 +25,8 @@ sub doctypedecl {
         
         $self->InternalSubset($reader);
         
-        $reader->match('>') or $self->parser_error("Doctype not closed", $reader);
+        $reader->match('>') ||
+                $self->parser_error("Doctype not closed", $reader);
         
         return 1;
     }
@@ -38,44 +37,26 @@ sub doctypedecl {
 sub ExternalID {
     my ($self, $reader) = @_;
     
-    my $data = $reader->data(6);
-    
-    if ($data =~ /^SYSTEM/) {
-        $reader->move_along(6);
+    if ($reader->match_string('SYSTEM')) {
         $self->skip_whitespace($reader) ||
             $self->parser_error("No whitespace after SYSTEM identifier", $reader);
         return (SYSTEM => $self->SystemLiteral($reader));
     }
-    elsif ($data =~ /^PUBLIC/) {
-        $reader->move_along(6);
+    elsif ($reader->match_string('PUBLIC')) {
         $self->skip_whitespace($reader) ||
             $self->parser_error("No whitespace after PUBLIC identifier", $reader);
         
         my $quote = $self->quote($reader) || 
             $self->parser_error("Not a quote character in PUBLIC identifier", $reader);
         
-        my $data = $reader->data;
-        my $pubid = '';
-        while(1) {
-            $self->parser_error("EOF while looking for end of PUBLIC identifiier", $reader)
-                unless length($data);
-            
-            if ($data =~ /^([^$quote]*)$quote/) {
-                $pubid .= $1;
-                $reader->move_along(length($1) + 1);
-                last;
-            }
-            else {
-                $pubid .= $data;
-                $reader->move_along(length($data));
-                $data = $reader->data;
-            }
-        }
-        
+        $reader->consume(qr/[^$quote]/);
+        my $pubid = $reader->consumed;
         if ($pubid !~ /^($PubidChar)+$/) {
             $self->parser_error("Invalid characters in PUBLIC identifier", $reader);
         }
         
+        $reader->match($quote) || 
+            $self->parser_error("Invalid quote character ending PUBLIC identifier", $reader);
         $self->skip_whitespace($reader) ||
             $self->parser_error("Not whitespace after PUBLIC ID in DOCTYPE", $reader);
         
@@ -94,34 +75,28 @@ sub SystemLiteral {
     
     my $quote = $self->quote($reader);
     
-    my $data = $reader->data;
-    my $systemid = '';
-    while (1) {
-        $self->parser_error("EOF found while looking for end of Sytem Literal", $reader)
-            unless length($data);
-        if ($data =~ /^([^$quote]*)$quote/) {
-            $systemid .= $1;
-            $reader->move_along(length($1) + 1);
-            return $systemid;
-        }
-        else {
-            $systemid .= $data;
-            $reader->move_along(length($data));
-            $data = $reader->data;
-        }
-    }
+    $reader->consume(qr/[^$quote]/);
+    my $systemid = $reader->consumed;
+    
+    $reader->match($quote) ||
+        $self->parser_error("Invalid token in System Literal", $reader);
+    return $systemid;
 }
 
 sub InternalSubset {
     my ($self, $reader) = @_;
     
-    return 0 unless $reader->match('[');
+    if ($reader->match('[')) {
+        
+        1 while $self->IntSubsetDecl($reader);
+        
+        $reader->match(']') ||
+            $self->parser_error("No close bracket on internal subset", $reader);
+        $self->skip_whitespace($reader);
+        return 1;
+    }
     
-    1 while $self->IntSubsetDecl($reader);
-    
-    $reader->match(']') or $self->parser_error("No close bracket on internal subset (found: " . $reader->data, $reader);
-    $self->skip_whitespace($reader);
-    return 1;
+    return 0;
 }
 
 sub IntSubsetDecl {
@@ -151,14 +126,17 @@ sub DeclSep {
 sub PEReference {
     my ($self, $reader) = @_;
     
-    return 0 unless $reader->match('%');
+    if ($reader->match('%')) {
+        my $peref = $self->Name($reader) ||
+            $self->parser_error("PEReference did not find a Name", $reader);
+        # TODO - load/parse the peref
+        
+        $reader->match(';') ||
+            $self->parser_error("Invalid token in PEReference", $reader);
+        return 1;
+    }
     
-    my $peref = $self->Name($reader) ||
-        $self->parser_error("PEReference did not find a Name", $reader);
-    # TODO - load/parse the peref
-    
-    $reader->match(';') or $self->parser_error("Invalid token in PEReference", $reader);
-    return 1;
+    return 0;
 }
 
 sub markupdecl {

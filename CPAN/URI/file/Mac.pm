@@ -25,7 +25,7 @@ sub _file_extract_path
     }
 
     my $isdir = ($path =~ s/:$//);
-    $path =~ s,([%/;]), URI::Escape::escape_char($1),eg;
+    $path =~ s,([%/;]),$URI::Escape::escapes{$1},g;
 
     my @path = split(/:/, $path, -1);
     for (@path) {

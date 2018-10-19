@@ -4,7 +4,7 @@ use strict;
 use vars qw($AUTOLOAD $VERSION);
 use URI;
 
-$VERSION = "2.20";
+$VERSION = "2.19";
 
 use overload '""' => "as_string", fallback => 1;
 

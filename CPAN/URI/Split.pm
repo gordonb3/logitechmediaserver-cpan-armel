@@ -18,7 +18,7 @@ sub uri_join {
     my $uri = defined($scheme) ? "$scheme:" : "";
     $path = "" unless defined $path;
     if (defined $auth) {
-	$auth =~ s,([/?\#]), URI::Escape::escape_char($1),eg;
+	$auth =~ s,([/?\#]),$URI::Escape::escapes{$1},g;
 	$uri .= "//$auth";
 	$path = "/$path" if length($path) && $path !~ m,^/,;
     }
@@ -26,12 +26,12 @@ sub uri_join {
 	$uri .= "//";  # XXX force empty auth
     }
     unless (length $uri) {
-	$path =~ s,(:), URI::Escape::escape_char($1),e while $path =~ m,^[^:/?\#]+:,;
+	$path =~ s,(:),$URI::Escape::escapes{$1}, while $path =~ m,^[^:/?\#]+:,;
     }
-    $path =~ s,([?\#]), URI::Escape::escape_char($1),eg;
+    $path =~ s,([?\#]),$URI::Escape::escapes{$1},g;
     $uri .= $path;
     if (defined $query) {
-	$query =~ s,(\#), URI::Escape::escape_char($1),eg;
+	$query =~ s,(\#),$URI::Escape::escapes{$1},g;
 	$uri .= "?$query";
     }
     $uri .= "#$frag" if defined $frag;

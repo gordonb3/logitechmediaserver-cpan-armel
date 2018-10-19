@@ -1,15 +1,13 @@
 package HTTP::Headers::ETag;
 
 use strict;
-use warnings;
-
-our $VERSION = "6.11";
+use vars qw($VERSION);
+$VERSION = sprintf("%d.%02d", q$Revision: 1.4 $ =~ /(\d+)\.(\d+)/);
 
 require HTTP::Date;
 
 require HTTP::Headers;
-package
-    HTTP::Headers;
+package HTTP::Headers;
 
 sub _etags
 {

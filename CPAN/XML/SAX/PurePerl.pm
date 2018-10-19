@@ -1,13 +1,13 @@
-# $Id$
+# $Id: PurePerl.pm 1097 2004-07-16 12:55:19Z dean $
 
 package XML::SAX::PurePerl;
 
 use strict;
 use vars qw/$VERSION/;
 
-$VERSION = '0.99';
+$VERSION = '0.90';
 
-use XML::SAX::PurePerl::Productions qw($NameChar $SingleChar);
+use XML::SAX::PurePerl::Productions qw($Any $CharMinusDash $SingleChar);
 use XML::SAX::PurePerl::Reader;
 use XML::SAX::PurePerl::EncodingDetect ();
 use XML::SAX::Exception;
@@ -76,6 +76,7 @@ sub _parse {
     
     $reader->public_id($self->{ParseOptions}{Source}{PublicId});
     $reader->system_id($self->{ParseOptions}{Source}{SystemId});
+    $reader->next;
 
     $self->{NSHelper} = XML::NamespaceSupport->new({xmlns => 1});
 
@@ -85,8 +86,6 @@ sub _parse {
             sub { $reader->system_id },
             sub { $reader->line },
             sub { $reader->column },
-            sub { $reader->get_encoding },
-            sub { $reader->get_xml_version },
         ),
     );
     
@@ -131,7 +130,7 @@ sub document {
     $self->element($reader) ||
         $self->parser_error("Document requires an element", $reader);
     
-    while(length($reader->data)) {
+    while(!$reader->eof) {
         $self->Misc($reader) || 
                 $self->parser_error("Only Comments, PIs and whitespace allowed at end of document", $reader);
     }
@@ -146,7 +145,7 @@ sub prolog {
     1 while($self->Misc($reader));
     
     if ($self->doctypedecl($reader)) {
-        while (length($reader->data)) {
+        while (!$reader->eof) {
             $self->Misc($reader) || last;
         }
     }
@@ -155,145 +154,135 @@ sub prolog {
 sub element {
     my ($self, $reader) = @_;
     
-    return 0 unless $reader->match('<');
-    
-    my $name = $self->Name($reader) || $self->parser_error("Invalid element name", $reader);
-    
-    my %attribs;
-    
-    while( my ($k, $v) = $self->Attribute($reader) ) {
-        $attribs{$k} = $v;
-    }
-    
-    my $have_namespaces = $self->get_feature(Namespaces);
-    
-    # Namespace processing
-    $self->{NSHelper}->push_context;
-    my @new_ns;
+    if ($reader->match_char('<')) {
+        my $name = $self->Name($reader) ||
+                $self->parser_error("Invalid element name", $reader);
+
+        my %attribs;
+        
+        while( my ($k, $v) = $self->Attribute($reader) ) {
+            $attribs{$k} = $v;
+        }
+        
+        $self->skip_whitespace($reader);
+        
+        my $content;
+        unless ($reader->match_sequence('/', '>')) {
+            $reader->match_char('>') ||
+                $self->parser_error("No close element tag", $reader);
+            
+            # only push onto _el_stack if not an empty element
+            push @{$self->{_el_stack}}, $name;
+            $content++;
+        }
+        
+        # Namespace processing
+        $self->{NSHelper}->push_context;
+        my @new_ns;
 #        my %attrs = @attribs;
 #        while (my ($k,$v) = each %attrs) {
-    if ($have_namespaces) {
-        while ( my ($k, $v) = each %attribs ) {
-            if ($k =~ m/^xmlns(:(.*))?$/) {
-                my $prefix = $2 || '';
-                $self->{NSHelper}->declare_prefix($prefix, $v);
-                my $ns = 
-                    {
-                        Prefix       => $prefix,
-                        NamespaceURI => $v,
-                    };
-                push @new_ns, $ns;
-                $self->SUPER::start_prefix_mapping($ns);
+        if ($self->get_feature(Namespaces)) {
+            while ( my ($k, $v) = each %attribs ) {
+                if ($k =~ m/^xmlns(:(.*))?$/) {
+                    my $prefix = $2 || '';
+                    $self->{NSHelper}->declare_prefix($prefix, $v);
+                    my $ns = 
+                        {
+                            Prefix       => $prefix,
+                            NamespaceURI => $v,
+                        };
+                    push @new_ns, $ns;
+                    $self->SUPER::start_prefix_mapping($ns);
+                }
             }
         }
-    }
 
-    # Create element object and fire event
-    my %attrib_hash;
-    while (my ($name, $value) = each %attribs ) {
-        # TODO normalise value here
+        # Create element object and fire event
+        my %attrib_hash;
+        while (my ($name, $value) = each %attribs ) {
+            # TODO normalise value here
+            my ($ns, $prefix, $lname);
+            if ($self->get_feature(Namespaces)) {
+                ($ns, $prefix, $lname) = $self->{NSHelper}->process_attribute_name($name);
+            }
+            $ns ||= ''; $prefix ||= ''; $lname ||= '';
+            $attrib_hash{"{$ns}$lname"} = {
+                Name => $name,
+                LocalName => $lname,
+                Prefix => $prefix,
+                NamespaceURI => $ns,
+                Value => $value,
+            };
+        }
+        
+        %attribs = (); # lose the memory since we recurse deep
+        
         my ($ns, $prefix, $lname);
-        if ($have_namespaces) {
-            ($ns, $prefix, $lname) = $self->{NSHelper}->process_attribute_name($name);
+        if ($self->get_feature(Namespaces)) {
+            ($ns, $prefix, $lname) = $self->{NSHelper}->process_element_name($name);
         }
         $ns ||= ''; $prefix ||= ''; $lname ||= '';
-        $attrib_hash{"{$ns}$lname"} = {
+
+        my $el = 
+        {
             Name => $name,
             LocalName => $lname,
             Prefix => $prefix,
             NamespaceURI => $ns,
-            Value => $value,
+            Attributes => \%attrib_hash,
         };
-    }
-    
-    %attribs = (); # lose the memory since we recurse deep
-    
-    my ($ns, $prefix, $lname);
-    if ($self->get_feature(Namespaces)) {
-        ($ns, $prefix, $lname) = $self->{NSHelper}->process_element_name($name);
-    }
-    else {
-        $lname = $name;
-    }
-    $ns ||= ''; $prefix ||= ''; $lname ||= '';
-
-    # Process remainder of start_element
-    $self->skip_whitespace($reader);
-    my $have_content;
-    my $data = $reader->data(2);
-    if ($data =~ /^\/>/) {
-        $reader->move_along(2);
-    }
-    else {
-        $data =~ /^>/ or $self->parser_error("No close element tag", $reader);
-        $reader->move_along(1);
-        $have_content++;
-    }
-    
-    my $el = 
-    {
-        Name => $name,
-        LocalName => $lname,
-        Prefix => $prefix,
-        NamespaceURI => $ns,
-        Attributes => \%attrib_hash,
-    };
-    $self->start_element($el);
-    
-    # warn("($name\n");
-    
-    if ($have_content) {
-        $self->content($reader);
+        $self->start_element($el);
         
-        my $data = $reader->data(2);
-        $data =~ /^<\// or $self->parser_error("No close tag marker", $reader);
-        $reader->move_along(2);
-        my $end_name = $self->Name($reader);
-        $end_name eq $name || $self->parser_error("End tag mismatch ($end_name != $name)", $reader);
-        $self->skip_whitespace($reader);
-        $reader->match('>') or $self->parser_error("No close '>' on end tag", $reader);
-    }
+        # warn("($name\n");
         
-    my %end_el = %$el;
-    delete $end_el{Attributes};
-    $self->end_element(\%end_el);
+        if ($content) {
+            $self->content($reader);
+            
+            $reader->match_sequence('<', '/') || $self->parser_error("No close tag marker", $reader);
+            my $end_name = $self->Name($reader);
+            $end_name eq $name || $self->parser_error("End tag mismatch ($end_name != $name)", $reader);
+            $self->skip_whitespace($reader);
+            $reader->match_char('>') || $self->parser_error("No close '>' on end tag", $reader);
+        }
+        
+        my %end_el = %$el;
+        delete $end_el{Attributes};
+        $self->end_element(\%end_el);
 
-    for my $ns (@new_ns) {
-        $self->end_prefix_mapping($ns);
+        for my $ns (@new_ns) {
+            $self->end_prefix_mapping($ns);
+        }
+        $self->{NSHelper}->pop_context;
+        
+        return 1;
     }
-    $self->{NSHelper}->pop_context;
     
-    return 1;
+    return 0;
 }
 
 sub content {
     my ($self, $reader) = @_;
     
+    $self->CharData($reader);
+    
     while (1) {
-        $self->CharData($reader);
-        
-        my $data = $reader->data(2);
-        
-        if ($data =~ /^<\//) {
+        if ($reader->match_sequence('<', '/')) {
+            $reader->buffer('</');
             return 1;
         }
-        elsif ($data =~ /^&/) {
-            $self->Reference($reader) or $self->parser_error("bare & not allowed in content", $reader);
+        elsif ( $self->Reference($reader) ||
+                $self->CDSect($reader) || 
+                $self->PI($reader) || 
+                $self->Comment($reader) ||
+                $self->element($reader) 
+               )
+        {
+            $self->CharData($reader);
             next;
         }
-        elsif ($data =~ /^<!/) {
-            ($self->CDSect($reader)
-             or
-             $self->Comment($reader))
-             and next;
+        else {
+            last;
         }
-        elsif ($data =~ /^<\?/) {
-            $self->PI($reader) and next;
-        }
-        elsif ($data =~ /^</) {
-            $self->element($reader) and next;
-        }
-        last;
     }
     
     return 1;
@@ -302,55 +291,52 @@ sub content {
 sub CDSect {
     my ($self, $reader) = @_;
     
-    my $data = $reader->data(9);
-    return 0 unless $data =~ /^<!\[CDATA\[/;
-    $reader->move_along(9);
-    
-    $self->start_cdata({});
-    
-    $data = $reader->data;
-    while (1) {
-        $self->parser_error("EOF looking for CDATA section end", $reader)
-            unless length($data);
-        
-        if ($data =~ /^(.*?)\]\]>/s) {
-            my $chars = $1;
-            $reader->move_along(length($chars) + 3);
-            $self->characters({Data => $chars});
-            last;
+    if ($reader->match_sequence('<', '!', '[', 'C', 'D', 'A', 'T', 'A', '[')) {
+        $self->start_cdata({});
+        my $chars = '';
+        while (1) {
+            if ($reader->eof) {
+                $self->parser_error("EOF looking for CDATA section end", $reader);
+            }
+            $reader->consume_not(']');
+            $chars .= $reader->consumed;
+            if ($reader->match_char(']')) {
+                if ($reader->match_sequence(']', '>')) {
+                    # end of CDATA section
+                    
+                    $self->characters({Data => $chars});
+                    last;
+                }
+                $chars .= ']';
+            }
         }
-        else {
-            $self->characters({Data => $data});
-            $reader->move_along(length($data));
-            $data = $reader->data;
-        }
+        $self->end_cdata({});
+        return 1;
     }
-    $self->end_cdata({});
-    return 1;
+    
+    return 0;
 }
 
 sub CharData {
     my ($self, $reader) = @_;
     
-    my $data = $reader->data;
-    
+    my $chars = '';
     while (1) {
-        return unless length($data);
-        
-        if ($data =~ /^([^<&]*)[<&]/s) {
-            my $chars = $1;
-            $self->parser_error("String ']]>' not allowed in character data", $reader)
-                if $chars =~ /\]\]>/;
-            $reader->move_along(length($chars));
-            $self->characters({Data => $chars}) if length($chars);
-            last;
+        $reader->consume_not('<', '&', ']');
+        $chars .= $reader->consumed;
+        if ($reader->match_char(']')) {
+            if ($reader->match_sequence(']', '>')) {
+                $self->parser_error("String ']]>' not allowed in character data", $reader);
+            }
+            else {
+                $chars .= ']';
+            }
+            next;
         }
-        else {
-            $self->characters({Data => $data});
-            $reader->move_along(length($data));
-            $data = $reader->data;
-        }
+        last;
     }
+    
+    $self->characters({ Data => $chars }) if length($chars);
 }
 
 sub Misc {
@@ -371,40 +357,40 @@ sub Misc {
 sub Reference {
     my ($self, $reader) = @_;
     
-    return 0 unless $reader->match('&');
-    
-    my $data = $reader->data;
-
-    # Fetch more data if we have an incomplete numeric reference
-    if ($data =~ /^(#\d*|#x[0-9a-fA-F]*)$/) {
-        $data = $reader->data(length($data) + 6);
+    if (!$reader->match_char('&')) {
+        return 0;
     }
     
-    if ($data =~ /^#x([0-9a-fA-F]+);/) {
-        my $ref = $1;
-        $reader->move_along(length($ref) + 3);
-        my $char = chr_ref(hex($ref));
-        $self->parser_error("Character reference &#$ref; refers to an illegal XML character ($char)", $reader)
-            unless $char =~ /$SingleChar/o;
-        $self->characters({ Data => $char });
-        return 1;
-    }
-    elsif ($data =~ /^#([0-9]+);/) {
-        my $ref = $1;
-        $reader->move_along(length($ref) + 2);
-        my $char = chr_ref($ref);
-        $self->parser_error("Character reference &#$ref; refers to an illegal XML character ($char)", $reader)
-            unless $char =~ /$SingleChar/o;
+    if ($reader->match_char('#')) {
+        # CharRef
+        my $char;
+        my $ref;
+        if ($reader->match_char('x')) {
+            $reader->consume(qr/[0-9a-fA-F]/) ||
+                $self->parser_error("Hex character reference contains illegal characters", $reader);
+            $ref = $reader->consumed;
+            $char = chr_ref(hex($ref));
+            $ref = "x$ref";
+        }
+        else {
+            $reader->consume(qr/[0-9]/) ||
+                $self->parser_error("Decimal character reference contains illegal characters", $reader);
+            $ref = $reader->consumed;
+            $char = chr_ref($ref);
+        }
+        $reader->match_char(';') ||
+                $self->parser_error("No semi-colon found after character reference", $reader);
+        if ($char !~ $SingleChar) { # match a single character
+            $self->parser_error("Character reference &#$ref; refers to an illegal XML character ($char)", $reader);
+        }
         $self->characters({ Data => $char });
         return 1;
     }
     else {
         # EntityRef
-        my $name = $self->Name($reader)
-            || $self->parser_error("Invalid name in entity", $reader);
-        $reader->match(';') or $self->parser_error("No semi-colon found after entity name", $reader);
-        
-        # warn("got entity: \&$name;\n");
+        my $name = $self->Name($reader);
+        $reader->match_char(';') ||
+                $self->parser_error("No semi-colon found after entity name", $reader);
         
         # expand it
         if ($self->_is_entity($name)) {
@@ -422,7 +408,7 @@ sub Reference {
             }
             return 1;
         }
-        elsif ($name =~ /^(?:amp|gt|lt|quot|apos)$/) {
+        elsif (_is_internal($name)) {
             $self->characters({ Data => $int_ents{$name} });
             return 1;
         }
@@ -433,18 +419,40 @@ sub Reference {
 }
 
 sub AttReference {
-    my ($self, $name, $reader) = @_;
-    if ($name =~ /^#x([0-9a-fA-F]+)$/) {
-        my $chr = chr_ref(hex($1));
-        $chr =~ /$SingleChar/o or $self->parser_error("Character reference '&$name;' refers to an illegal XML character", $reader);
-        return $chr;
-    }
-    elsif ($name =~ /^#([0-9]+)$/) {
-        my $chr = chr_ref($1);
-        $chr =~ /$SingleChar/o or $self->parser_error("Character reference '&$name;' refers to an illegal XML character", $reader);
-        return $chr;
+    # a reference in an attribute value.
+    my ($self, $reader) = @_;
+    
+    if ($reader->match_char('#')) {
+        # CharRef
+        my $char;
+        my $ref;
+        if ($reader->match_char('x')) {
+            $reader->consume(qr/[0-9a-fA-F]/) ||
+                $self->parser_error("Hex character reference contains illegal characters", $reader);
+            $ref = $reader->consumed;
+            $char = chr_ref(hex($ref));
+            $ref = "x$ref";
+        }
+        else {
+            $reader->consume(qr/[0-9]/) ||
+                $self->parser_error("Decimal character reference contains illegal characters", $reader);
+            $ref = $reader->consumed;
+            $char = chr_ref($ref);
+        }
+        $reader->match_char(';') ||
+                $self->parser_error("No semi-colon found after character reference", $reader);
+        if ($char !~ $SingleChar) { # match a single character
+            $self->parser_error("Character reference '&#$ref;' refers to an illegal XML character ($char)", $reader);
+        }
+        return $char;
     }
     else {
+        # EntityRef
+        my $name = $self->Name($reader);
+        $reader->match_char(';') ||
+                $self->parser_error("No semi-colon found after entity name", $reader);
+        
+        # expand it
         if ($self->_is_entity($name)) {
             if ($self->_is_external($name)) {
                 $self->parser_error("No external entity references allowed in attribute values", $reader);
@@ -454,13 +462,14 @@ sub AttReference {
                 return $value;
             }
         }
-        elsif ($name =~ /^(?:amp|lt|gt|quot|apos)$/) {
+        elsif (_is_internal($name)) {
             return $int_ents{$name};
         }
         else {
             $self->parser_error("Undeclared entity '$name'", $reader);
         }
     }
+        
 }
 
 sub extParsedEnt {
@@ -468,6 +477,12 @@ sub extParsedEnt {
     
     $self->TextDecl($reader);
     $self->content($reader);
+}
+
+sub _is_internal {
+    my $e = shift;
+    return 1 if $e eq 'amp' || $e eq 'lt' || $e eq 'gt' || $e eq 'quot' || $e eq 'apos';
+    return 0;
 }
 
 sub _is_external {
@@ -496,13 +511,8 @@ sub _stringify_entity {
     }
     # expand
     my $reader = XML::SAX::PurePerl::Reader::URI->new($self->{ParseOptions}{entities}{$name});
-    my $ent = '';
-    while(1) {
-        my $data = $reader->data;
-        $ent .= $data;
-        $reader->move_along(length($data)) or last;
-    }
-    return $self->{ParseOptions}{expanded_entity}{$name} = $ent;
+    $reader->consume(qr/./);
+    return $self->{ParseOptions}{expanded_entity}{$name} = $reader->consumed;
 }
 
 sub _get_entity {
@@ -514,16 +524,19 @@ sub _get_entity {
 sub skip_whitespace {
     my ($self, $reader) = @_;
     
-    my $data = $reader->data;
-    
     my $found = 0;
-    while ($data =~ s/^([\x20\x0A\x0D\x09]*)//) {
-        last unless length($1);
-        $found++;
-        $reader->move_along(length($1));
-        $data = $reader->data;
+    while (1) {
+        if ($reader->match_char("\x20") ||
+            $reader->match_char("\x0A") ||
+            $reader->match_char("\x0D") ||
+            $reader->match_char("\x09"))
+        {
+            $found++;
+        }
+        else {
+            last;
+        }
     }
-    
     return $found;
 }
 
@@ -531,13 +544,18 @@ sub Attribute {
     my ($self, $reader) = @_;
     
     $self->skip_whitespace($reader) || return;
-    
-    my $data = $reader->data(2);
-    return if $data =~ /^\/?>/;
-    
+    if ($reader->match_sequence('/', '>')) {
+        $reader->buffer("/>");
+        return;
+    }
+    if ($reader->match_char(">")) {
+        $reader->buffer(">");
+        return;
+    }
     if (my $name = $self->Name($reader)) {
         $self->skip_whitespace($reader);
-        $reader->match('=') or $self->parser_error("No '=' in Attribute", $reader);
+        $reader->match_char('=') ||
+                $self->parser_error("No '=' in Attribute", $reader);
         $self->skip_whitespace($reader);
         my $value = $self->AttValue($reader);
 
@@ -555,61 +573,64 @@ sub Attribute {
 
 sub cdata_attrib {
     # TODO implement this!
-    return 1;
+    return 0;
 }
 
 sub AttValue {
     my ($self, $reader) = @_;
     
-    my $quote = $self->quote($reader);
+    my $quote = '"';
+    if (!$reader->match_char($quote)) {
+        $quote = "'";
+        $reader->match_char($quote) ||
+                $self->parser_error("Not a quote character", $reader);
+    }
     
     my $value = '';
     
     while (1) {
-        my $data = $reader->data;
-        $self->parser_error("EOF found while looking for the end of attribute value", $reader)
-            unless length($data);
-        if ($data =~ /^([^$quote]*)$quote/) {
-            $reader->move_along(length($1) + 1);
-            $value .= $1;
+        if ($reader->consume_not('<', '&', $quote)) {
+            my $to_append = $reader->consumed;
+            $to_append =~ s/[\x09\x0A\x0D]/\x20/g; # Attrib value normalize
+            $value .= $to_append;
+        }
+        elsif ($reader->match_char('&')) {
+            $value .= $self->AttReference($reader);
+        }
+        elsif ($reader->match_char($quote)) {
+            # end of attrib
             last;
         }
         else {
-            $value .= $data;
-            $reader->move_along(length($data));
+            $self->parser_error("Invalid character in attribute value", $reader);
         }
     }
-    
-    if ($value =~ /</) {
-        $self->parser_error("< character not allowed in attribute values", $reader);
-    }
-    
-    $value =~ s/[\x09\x0A\x0D]/\x20/g;
-    $value =~ s/&(#(x[0-9a-fA-F]+)|#([0-9]+)|\w+);/$self->AttReference($1, $reader)/geo;
-    
+
     return $value;
 }
 
 sub Comment {
     my ($self, $reader) = @_;
     
-    my $data = $reader->data(4);
-    if ($data =~ /^<!--/) {
-        $reader->move_along(4);
+    if ($reader->match_sequence('<', '!', '-', '-')) {
         my $comment_str = '';
         while (1) {
-            my $data = $reader->data;
-            $self->parser_error("End of data seen while looking for close comment marker", $reader)
-                unless length($data);
-            if ($data =~ /^(.*?)-->/s) {
-                $comment_str .= $1;
-                $self->parser_error("Invalid comment (dash)", $reader) if $comment_str =~ /-$/;
-                $reader->move_along(length($1) + 3);
-                last;
+            if ($reader->match_char('-')) {
+                if ($reader->match_char('-')) {
+                    $reader->match_char('>') ||
+                        $self->parser_error("Invalid string in comment field", $reader);
+                    last;
+                }
+                $comment_str .= '-';
+                $reader->consume($CharMinusDash) ||
+                    $self->parser_error("Invalid string in comment field", $reader);
+                $comment_str .= $reader->consumed;
+            }
+            elsif ($reader->consume($CharMinusDash)) {
+                $comment_str .= $reader->consumed;
             }
             else {
-                $comment_str .= $data;
-                $reader->move_along(length($data));
+                $self->parser_error("Invalid string in comment field", $reader);
             }
         }
         
@@ -622,39 +643,28 @@ sub Comment {
 
 sub PI {
     my ($self, $reader) = @_;
-    
-    my $data = $reader->data(2);
-    
-    if ($data =~ /^<\?/) {
-        $reader->move_along(2);
-        my ($target);
+    if ($reader->match_sequence('<', '?')) {
+        my ($target, $data);
         $target = $self->Name($reader) ||
             $self->parser_error("PI has no target", $reader);
-	    
-        my $pi_data = '';
         if ($self->skip_whitespace($reader)) {
             while (1) {
-                my $data = $reader->data;
-                $self->parser_error("End of data seen while looking for close PI marker", $reader)
-                    unless length($data);
-                if ($data =~ /^(.*?)\?>/s) {
-                    $pi_data .= $1;
-                    $reader->move_along(length($1) + 2);
+                if ($reader->match_sequence('?', '>')) {
                     last;
                 }
+                elsif ($reader->match_re($Any)) {
+                    $data .= $reader->matched;
+                }
                 else {
-                    $pi_data .= $data;
-                    $reader->move_along(length($data));
+                    last;
                 }
             }
         }
         else {
-            my $data = $reader->data(2);
-            $data =~ /^\?>/ or $self->parser_error("PI closing sequence not found", $reader);
-            $reader->move_along(2);
+            $reader->match_sequence('?', '>') ||
+                $self->parser_error("PI closing sequence not found", $reader);
         }
-	
-        $self->processing_instruction({ Target => $target, Data => $pi_data });
+        $self->processing_instruction({ Target => $target, Data => $data });
         
         return 1;
     }
@@ -664,32 +674,19 @@ sub PI {
 sub Name {
     my ($self, $reader) = @_;
     
-    my $name = '';
-    while(1) {
-        my $data = $reader->data;
-        return unless length($data);
-        $data =~ /^([^\s>\/&\?;=<\)\(\[\],\%\#\!\*\|]*)/ or return;
-        $name .= $1;
-        my $len = length($1);
-        $reader->move_along($len);
-        last if ($len != length($data));
-    }
-    
-    return unless length($name);
-    
-    $name =~ /$NameChar/o or $self->parser_error("Name <$name> does not match NameChar production", $reader);
-
-    return $name;
+    return $reader->consume_name();
 }
 
 sub quote {
     my ($self, $reader) = @_;
+    my $quote = '"';
     
-    my $data = $reader->data;
-    
-    $data =~ /^(['"])/ or $self->parser_error("Invalid quote token", $reader);
-    $reader->move_along(1);
-    return $1;
+    if (!$reader->match_char($quote)) {
+        $quote = "'";
+        $reader->match_char($quote) ||
+            $self->parser_error("Invalid quote token", $reader);
+    }
+    return $quote;
 }
 
 1;

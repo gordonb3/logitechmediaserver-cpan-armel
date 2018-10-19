@@ -4,7 +4,7 @@ package I18N::LangTags::List;
 #  Time-stamp: "2004-10-06 23:26:21 ADT"
 use strict;
 use vars qw(%Name %Is_Disrec $Debug $VERSION);
-$VERSION = '0.39';
+$VERSION = '0.35';
 # POD at the end.
 
 #----------------------------------------------------------------------
@@ -151,7 +151,7 @@ the language tag is syntactically valid and is for general use (like
 syntactically invalid and for tags, like "aus", that are listed in
 brackets below.  This function is not exported.
 
-The map of tags-to-names that it uses is accessible as
+The map of tags-to-names that it uses is accessable as
 %I18N::LangTags::List::Name, and it's the same as the list
 that follows in this documentation, which should be useful
 to you even if you don't use this module.

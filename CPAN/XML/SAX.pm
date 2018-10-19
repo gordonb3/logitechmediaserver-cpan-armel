@@ -1,11 +1,11 @@
-# $Id$
+# $Id: SAX.pm 1097 2004-07-16 12:55:19Z dean $
 
 package XML::SAX;
 
 use strict;
 use vars qw($VERSION @ISA @EXPORT_OK);
 
-$VERSION = '0.99';
+$VERSION = '0.12';
 
 use Exporter ();
 @ISA = ('Exporter');
@@ -350,10 +350,6 @@ via ParserFactory:
   my $parser = $factory->parser();
 
 =head1 AUTHOR
-
-Current maintainer: Grant McLean, grantm@cpan.org
-
-Originally written by:
 
 Matt Sergeant, matt@sergeant.org
 

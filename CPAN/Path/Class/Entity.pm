@@ -1,14 +1,11 @@
-use strict;
-
 package Path::Class::Entity;
-{
-  $Path::Class::Entity::VERSION = '0.36';
-}
 
-use File::Spec 3.26;
+$VERSION = '0.17';
+
+use strict;
+use File::Spec;
 use File::stat ();
 use Cwd;
-use Carp();
 
 use overload
   (
@@ -32,7 +29,6 @@ sub _spec_class {
 
   die "Invalid system type '$type'" unless ($type) = $type =~ /^(\w+)$/;  # Untaint
   my $spec = "File::Spec::$type";
-  ## no critic
   eval "require $spec; 1" or die $@;
   return $spec;
 }
@@ -43,7 +39,7 @@ sub new_foreign {
   return $class->new(@_);
 }
 
-sub _spec { (ref($_[0]) && $_[0]->{file_spec_class}) || 'File::Spec' }
+sub _spec { $_[0]->{file_spec_class} || 'File::Spec' }
 
 sub boolify { 1 }
   
@@ -57,15 +53,14 @@ sub is_relative { ! $_[0]->is_absolute }
 
 sub cleanup {
   my $self = shift;
-  my $cleaned = $self->new( $self->_spec->canonpath("$self") );
+  my $cleaned = $self->new( $self->_spec->canonpath($self) );
   %$self = %$cleaned;
   return $self;
 }
 
 sub resolve {
   my $self = shift;
-  Carp::croak($! . " $self") unless -e $self;  # No such file or directory
-  my $cleaned = $self->new( scalar Cwd::realpath($self->stringify) );
+  my $cleaned = $self->new( Cwd::realpath($self->stringify) );
 
   # realpath() always returns absolute path, kind of annoying
   $cleaned = $cleaned->relative if $self->is_relative;
@@ -88,30 +83,4 @@ sub relative {
 sub stat  { File::stat::stat("$_[0]") }
 sub lstat { File::stat::lstat("$_[0]") }
 
-sub PRUNE { return \&PRUNE; }
-
 1;
-__END__
-
-=head1 NAME
-
-Path::Class::Entity - Base class for files and directories
-
-=head1 VERSION
-
-version 0.36
-
-=head1 DESCRIPTION
-
-This class is the base class for C<Path::Class::File> and
-C<Path::Class::Dir>, it is not used directly by callers.
-
-=head1 AUTHOR
-
-Ken Williams, kwilliams@cpan.org
-
-=head1 SEE ALSO
-
-Path::Class
-
-=cut

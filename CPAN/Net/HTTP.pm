@@ -1,34 +1,15 @@
 package Net::HTTP;
 
+# $Id: HTTP.pm 8931 2006-08-11 16:44:43Z dsully $
+
 use strict;
-use vars qw($VERSION @ISA $SOCKET_CLASS);
+use vars qw($VERSION @ISA);
 
-$VERSION = "6.09";
-$VERSION = eval $VERSION;
-
-unless ($SOCKET_CLASS) {
-    # Try several, in order of capability and preference
-    if (eval { require IO::Socket::IP }) {
-       $SOCKET_CLASS = "IO::Socket::IP";    # IPv4+IPv6
-    } elsif (eval { require IO::Socket::INET6 }) {
-       $SOCKET_CLASS = "IO::Socket::INET6"; # IPv4+IPv6
-    } elsif (eval { require IO::Socket::INET }) {
-       $SOCKET_CLASS = "IO::Socket::INET";  # IPv4 only
-    } else {
-       require IO::Socket;
-       $SOCKET_CLASS = "IO::Socket::INET";
-    }
-}
+$VERSION = "1.00";
+eval { require IO::Socket::INET } || require IO::Socket;
 require Net::HTTP::Methods;
-require Carp;
 
-@ISA = ($SOCKET_CLASS, 'Net::HTTP::Methods');
-
-sub new {
-    my $class = shift;
-    Carp::croak("No Host option provided") unless @_;
-    $class->SUPER::new(@_);
-}
+@ISA=qw(IO::Socket::INET Net::HTTP::Methods);
 
 sub configure {
     my($self, $cnf) = @_;
@@ -68,13 +49,12 @@ Net::HTTP - Low-level HTTP connection (client)
 The C<Net::HTTP> class is a low-level HTTP client.  An instance of the
 C<Net::HTTP> class represents a connection to an HTTP server.  The
 HTTP protocol is described in RFC 2616.  The C<Net::HTTP> class
-supports C<HTTP/1.0> and C<HTTP/1.1>.
+support C<HTTP/1.0> and C<HTTP/1.1>.
 
-C<Net::HTTP> is a sub-class of one of C<IO::Socket::IP> (IPv6+IPv4),
-C<IO::Socket::INET6> (IPv6+IPv4), or C<IO::Socket::INET> (IPv4 only).  
-You can mix the methods described below with reading and writing from the
-socket directly.  This is not necessary a good idea, unless you know what
-you are doing.
+C<Net::HTTP> is a sub-class of C<IO::Socket::INET>.  You can mix the
+methods described below with reading and writing from the socket
+directly.  This is not necessary a good idea, unless you know what you
+are doing.
 
 The following methods are provided (in addition to those of
 C<IO::Socket::INET>):
@@ -96,9 +76,6 @@ C<IO::Socket::INET>'s as well as these:
 
 The C<Host> option is also the default for C<IO::Socket::INET>'s
 C<PeerAddr>.  The C<PeerPort> defaults to 80 if not provided.
-The C<PeerPort> specification can also be embedded in the C<PeerAddr>
-by preceding it with a ":", and closing the IPv6 address on brackets "[]" if
-necessary: "192.0.2.1:80","[2001:db8::1]:80","any.example.com:80".
 
 The C<Listen> option provided by C<IO::Socket::INET>'s constructor
 method is not allowed.
@@ -125,9 +102,9 @@ and C<peer_http_version> attributes.
 
 Get/set the a value indicating if the request will be sent with a "TE"
 header to indicate the transfer encodings that the server can choose to
-use.  The list of encodings announced as accepted by this client depends
-on availability of the following modules: C<Compress::Raw::Zlib> for
-I<deflate>, and C<IO::Compress::Gunzip> for I<gzip>.
+use.  If the C<Compress::Zlib> module is installed then this will
+announce that this client accept both the I<deflate> and I<gzip>
+encodings.
 
 =item $s->http_version
 
@@ -143,11 +120,11 @@ read_response_headers() method call.
 =item $s->max_line_length
 
 Get/set a limit on the length of response line and response header
-lines.  The default is 8192.  A value of 0 means no limit.
+lines.  The default is 4096.  A value of 0 means no limit.
 
 =item $s->max_header_length
 
-Get/set a limit on the number of header lines that a response can
+Get/set a limit on the number of headers lines that a response can
 have.  The default is 128.  A value of 0 means no limit.
 
 =item $s->format_request($method, $uri, %headers, [$content])
@@ -238,12 +215,7 @@ read_response_headers() call.
 
 The return value will be C<undef> on read errors, 0 on EOF, -1 if no data
 could be returned this time, otherwise the number of bytes assigned
-to $buf.  The $buf is set to "" when the return value is -1.
-
-You normally want to retry this call if this function returns either
--1 or C<undef> with C<$!> as EINTR or EAGAIN (see L<Errno>).  EINTR
-can happen if the application catches signals and EAGAIN can happen if
-you made the socket non-blocking.
+to $buf.  The $buf set to "" when the return value is -1.
 
 This method will raise exceptions (die) if the server does not speak
 proper HTTP.  This can only happen when reading chunked data.

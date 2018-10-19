@@ -1,18 +1,17 @@
 package LWP::ConnCache;
 
+# $Id: ConnCache.pm 8931 2006-08-11 16:44:43Z dsully $
+
 use strict;
 use vars qw($VERSION $DEBUG);
 
-$VERSION = "6.15";
+$VERSION = "0.01";
 
 
 sub new {
     my($class, %cnf) = @_;
-
-    my $total_capacity = 1;
-    if (exists $cnf{total_capacity}) {
-        $total_capacity = delete $cnf{total_capacity};
-    }
+    my $total_capacity = delete $cnf{total_capacity};
+    $total_capacity = 1 unless defined $total_capacity;
     if (%cnf && $^W) {
 	require Carp;
 	Carp::carp("Unrecognised options: @{[sort keys %cnf]}")

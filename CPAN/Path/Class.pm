@@ -1,28 +1,19 @@
-use strict;
-
 package Path::Class;
-{
-  $Path::Class::VERSION = '0.36';
-}
 
-{
-  ## no critic
-  no strict 'vars';
-  @ISA = qw(Exporter);
-  @EXPORT    = qw(file dir);
-  @EXPORT_OK = qw(file dir foreign_file foreign_dir tempdir);
-}
+$VERSION = '0.17';
+@ISA = qw(Exporter);
+@EXPORT    = qw(file dir);
+@EXPORT_OK = qw(file dir foreign_file foreign_dir);
 
+use strict;
 use Exporter;
 use Path::Class::File;
 use Path::Class::Dir;
-use File::Temp ();
 
 sub file { Path::Class::File->new(@_) }
 sub dir  { Path::Class::Dir ->new(@_) }
 sub foreign_file { Path::Class::File->new_foreign(@_) }
 sub foreign_dir  { Path::Class::Dir ->new_foreign(@_) }
-sub tempdir { Path::Class::Dir->new(File::Temp::tempdir(@_)) }
 
 
 1;
@@ -31,10 +22,6 @@ __END__
 =head1 NAME
 
 Path::Class - Cross-platform path specification manipulation
-
-=head1 VERSION
-
-version 0.36
 
 =head1 SYNOPSIS
 
@@ -77,7 +64,7 @@ C<'/home/ken/foo.txt'> or C<'C:\Windows\Foo.txt'>) in a cross-platform
 manner.  It supports pretty much every platform Perl runs on,
 including Unix, Windows, Mac, VMS, Epoc, Cygwin, OS/2, and NetWare.
 
-The well-known module L<File::Spec> also provides this service, but
+The well-known module C<File::Spec> also provides this service, but
 it's sort of awkward to use well, so people sometimes avoid it, or use
 it in a way that won't actually work properly on platforms
 significantly different than the ones they've tested their code on.
@@ -115,8 +102,8 @@ on Windows) into account when writing C<File::Spec>-using code?  I
 thought not.  But if you use C<Path::Class>, your file and directory objects
 will know what volumes they refer to and do the right thing.
 
-The guts of the C<Path::Class> code live in the L<Path::Class::File>
-and L<Path::Class::Dir> modules, so please see those
+The guts of the C<Path::Class> code live in the C<Path::Class::File>
+and C<Path::Class::Dir> modules, so please see those
 modules' documentation for more details about how to use them.
 
 =head2 EXPORT
@@ -150,14 +137,6 @@ A synonym for C<< Path::Class::File->new_foreign >>.
 
 A synonym for C<< Path::Class::Dir->new_foreign >>.
 
-=item tempdir
-
-Create a new Path::Class::Dir instance pointed to temporary directory.
-
-  my $temp = Path::Class::tempdir(CLEANUP => 1);
-
-A synonym for C<< Path::Class::Dir->new(File::Temp::tempdir(@_)) >>.
-
 =back
 
 =head1 Notes on Cross-Platform Compatibility
@@ -170,7 +149,7 @@ aware of.
 
 =item *
 
-On some platforms, notably VMS and some older versions of DOS (I think),
+Some platforms, notably VMS and some older versions of DOS (I think),
 all filenames must have an extension.  Thus if you create a file
 called F<foo/bar> and then ask for a list of files in the directory
 F<foo>, you may find a file called F<bar.> instead of the F<bar> you
@@ -193,6 +172,6 @@ modify it under the same terms as Perl itself.
 
 =head1 SEE ALSO
 
-L<Path::Class::Dir>, L<Path::Class::File>, L<File::Spec>
+Path::Class::Dir, Path::Class::File, File::Spec
 
 =cut

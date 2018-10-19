@@ -1,38 +1,32 @@
+# $Id: Common.pm 8931 2006-08-11 16:44:43Z dsully $
+#
 package HTTP::Request::Common;
 
 use strict;
-use warnings;
+use vars qw(@EXPORT @EXPORT_OK $VERSION $DYNAMIC_FILE_UPLOAD);
 
-our $DYNAMIC_FILE_UPLOAD ||= 0;  # make it defined (don't know why)
+$DYNAMIC_FILE_UPLOAD ||= 0;  # make it defined (don't know why)
 
-use Exporter 5.57 'import';
-
-our @EXPORT =qw(GET HEAD PUT POST);
-our @EXPORT_OK = qw($DYNAMIC_FILE_UPLOAD DELETE);
+require Exporter;
+*import = \&Exporter::import;
+@EXPORT =qw(GET HEAD PUT POST);
+@EXPORT_OK = qw($DYNAMIC_FILE_UPLOAD);
 
 require HTTP::Request;
 use Carp();
 
-our $VERSION = "6.11";
+$VERSION = sprintf("%d.%02d", q$Revision: 1.26 $ =~ /(\d+)\.(\d+)/);
 
 my $CRLF = "\015\012";   # "\r\n" is not portable
 
 sub GET  { _simple_req('GET',  @_); }
 sub HEAD { _simple_req('HEAD', @_); }
-sub DELETE { _simple_req('DELETE', @_); }
+sub PUT  { _simple_req('PUT' , @_); }
 
-for my $type (qw(PUT POST)) {
-    no strict 'refs';
-    *{ __PACKAGE__ . "::" . $type } = sub {
-        return request_type_with_data($type, @_);
-    };
-}
-
-sub request_type_with_data
+sub POST
 {
-    my $type = shift;
-    my $url  = shift;
-    my $req = HTTP::Request->new($type => $url);
+    my $url = shift;
+    my $req = HTTP::Request->new(POST => $url);
     my $content;
     $content = shift if @_ and ref $_[0];
     my($k, $v);
@@ -63,7 +57,7 @@ sub request_type_with_data
 	    my $boundary_index;
 	    for (my @tmp = @v; @tmp;) {
 		my($k, $v) = splice(@tmp, 0, 2);
-		if ($k eq "boundary") {
+		if (lc($k) eq "boundary") {
 		    $boundary = $v;
 		    $boundary_index = @v - @tmp - 1;
 		    last;
@@ -88,9 +82,6 @@ sub request_type_with_data
 	    my $url = URI->new('http:');
 	    $url->query_form(ref($content) eq "HASH" ? %$content : @$content);
 	    $content = $url->query;
-
-	    # HTML/4.01 says that line breaks are represented as "CR LF" pairs (i.e., `%0D%0A')
-	    $content =~ s/(?<!%0D)%0A/%0D%0A/g if defined($content);
 	}
     }
 
@@ -112,18 +103,13 @@ sub _simple_req
     my($method, $url) = splice(@_, 0, 2);
     my $req = HTTP::Request->new($method => $url);
     my($k, $v);
-    my $content;
     while (($k,$v) = splice(@_, 0, 2)) {
 	if (lc($k) eq 'content') {
 	    $req->add_content($v);
-            $content++;
 	}
 	else {
 	    $req->push_header($k, $v);
 	}
-    }
-    if ($content && !defined($req->header("Content-Length"))) {
-        $req->header("Content-Length", length(${$req->content_ref}));
     }
     $req;
 }
@@ -135,10 +121,10 @@ sub form_data   # RFC1867
     my @data = ref($data) eq "HASH" ? %$data : @$data;  # copy
     my $fhparts;
     my @parts;
-    while (my ($k,$v) = splice(@data, 0, 2)) {
+    my($k,$v);
+    while (($k,$v) = splice(@data, 0, 2)) {
 	if (!ref($v)) {
 	    $k =~ s/([\\\"])/\\$1/g;  # escape quotes and backslashes
-            no warnings 'uninitialized';
 	    push(@parts,
 		 qq(Content-Disposition: form-data; name="$k"$CRLF$CRLF$v));
 	}
@@ -148,22 +134,18 @@ sub form_data   # RFC1867
 		$usename = $file;
 		$usename =~ s,.*/,, if defined($usename);
 	    }
-            $k =~ s/([\\\"])/\\$1/g;
 	    my $disp = qq(form-data; name="$k");
-            if (defined($usename) and length($usename)) {
-                $usename =~ s/([\\\"])/\\$1/g;
-                $disp .= qq(; filename="$usename");
-            }
+	    $disp .= qq(; filename="$usename") if $usename;
 	    my $content = "";
 	    my $h = HTTP::Headers->new(@headers);
 	    if ($file) {
-		open(my $fh, "<", $file) or Carp::croak("Can't open file $file: $!");
+		require Symbol;
+		my $fh = Symbol::gensym();
+		open($fh, $file) or Carp::croak("Can't open file $file: $!");
 		binmode($fh);
 		if ($DYNAMIC_FILE_UPLOAD) {
-		    # will read file later, close it now in order to
-                    # not accumulate to many open file handles
-                    close($fh);
-		    $content = \$file;
+		    # will read file later
+		    $content = $fh;
 		}
 		else {
 		    local($/) = undef; # slurp files
@@ -188,7 +170,7 @@ sub form_data   # RFC1867
 			           $h->as_string($CRLF),
 			           "");
 	    if (ref $content) {
-		push(@parts, [$head, $$content]);
+		push(@parts, [$head, $content]);
 		$fhparts++;
 	    }
 	    else {
@@ -248,12 +230,6 @@ sub form_data   # RFC1867
 		    return $p;
 		}
 		my($buf, $fh) = @$p;
-                unless (ref($fh)) {
-                    my $file = $fh;
-                    undef($fh);
-                    open($fh, "<", $file) || Carp::croak("Can't open file $file: $!");
-                    binmode($fh);
-                }
 		my $buflength = length $buf;
 		my $n = read($fh, $buf, 2048, $buflength);
 		if ($n) {
@@ -367,19 +343,6 @@ $ua->request(HEAD ...).
 
 Like GET() but the method in the request is "PUT".
 
-The content of the request can be specified using the "Content"
-pseudo-header.  This steals a bit of the header field namespace as
-there is no way to directly specify a header that is actually called
-"Content".  If you really need this you must update the request
-returned in a separate statement.
-
-=item DELETE $url
-
-=item DELETE $url, Header => Value,...
-
-Like GET() but the method in the request is "DELETE".  This function
-is not exported by default.
-
 =item POST $url
 
 =item POST $url, Header => Value,...
@@ -388,18 +351,12 @@ is not exported by default.
 
 =item POST $url, Header => Value,..., Content => $form_ref
 
-=item POST $url, Header => Value,..., Content => $content
-
-This works mostly like PUT() with "POST" as the method, but this
-function also takes a second optional array or hash reference
-parameter $form_ref.  As for PUT() the content can also be specified
-directly using the "Content" pseudo-header, and you may also provide
-the $form_ref this way.
-
-The $form_ref argument can be used to pass key/value pairs for the
-form content.  By default we will initialize a request using the
+This works mostly like GET() with "POST" as the method, but this function
+also takes a second optional array or hash reference parameter
+($form_ref).  This argument can be used to pass key/value pairs for
+the form content.  By default we will initialize a request using the
 C<application/x-www-form-urlencoded> content type.  This means that
-you can emulate an HTML E<lt>form> POSTing like this:
+you can emulate a HTML E<lt>form> POSTing like this:
 
   POST 'http://www.perl.org/survey.cgi',
        [ name   => 'Gisle Aas',
@@ -409,7 +366,7 @@ you can emulate an HTML E<lt>form> POSTing like this:
          perc   => '3%',
        ];
 
-This will create an HTTP::Request object that looks like this:
+This will create a HTTP::Request object that looks like this:
 
   POST http://www.perl.org/survey.cgi
   Content-Length: 66
@@ -455,7 +412,7 @@ achieved by this:
                          init   => ["$ENV{HOME}/.profile"],
                        ]
 
-This will create an HTTP::Request object that almost looks this (the
+This will create a HTTP::Request object that almost looks this (the
 boundary and the content of your F<~/.profile> is likely to be
 different):
 
@@ -465,24 +422,24 @@ different):
 
   --6G+f
   Content-Disposition: form-data; name="name"
-
+  
   Gisle Aas
   --6G+f
   Content-Disposition: form-data; name="email"
-
+  
   gisle@aas.no
   --6G+f
   Content-Disposition: form-data; name="gender"
-
+  
   M
   --6G+f
   Content-Disposition: form-data; name="born"
-
+  
   1964
   --6G+f
   Content-Disposition: form-data; name="init"; filename=".profile"
   Content-Type: text/plain
-
+  
   PATH=/local/perl/bin:$PATH
   export PATH
 

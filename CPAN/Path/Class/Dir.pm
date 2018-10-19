@@ -1,23 +1,15 @@
-use strict;
-
 package Path::Class::Dir;
-{
-  $Path::Class::Dir::VERSION = '0.36';
-}
 
+$VERSION = '0.17';
+
+use strict;
 use Path::Class::File;
+use Path::Class::Entity;
 use Carp();
-use parent qw(Path::Class::Entity);
+use base qw(Path::Class::Entity);
 
 use IO::Dir ();
 use File::Path ();
-use File::Temp ();
-use Scalar::Util ();
-
-# updir & curdir on the local machine, for screening them out in
-# children().  Note that they don't respect 'foreign' semantics.
-my $Updir  = __PACKAGE__->_spec->updir;
-my $Curdir = __PACKAGE__->_spec->curdir;
 
 sub new {
   my $self = shift->SUPER::new();
@@ -31,31 +23,15 @@ sub new {
   my $s = $self->_spec;
   
   my $first = (@_ == 0     ? $s->curdir :
-	       !ref($_[0]) && $_[0] eq '' ? (shift, $s->rootdir) :
+	       $_[0] eq '' ? (shift, $s->rootdir) :
 	       shift()
 	      );
   
-  $self->{dirs} = [];
-  if ( Scalar::Util::blessed($first) && $first->isa("Path::Class::Dir") ) {
-    $self->{volume} = $first->{volume};
-    push @{$self->{dirs}}, @{$first->{dirs}};
-  }
-  else {
-    ($self->{volume}, my $dirs) = $s->splitpath( $s->canonpath("$first") , 1);
-    push @{$self->{dirs}}, $dirs eq $s->rootdir ? "" : $s->splitdir($dirs);
-  }
-
-  push @{$self->{dirs}}, map {
-    Scalar::Util::blessed($_) && $_->isa("Path::Class::Dir")
-      ? @{$_->{dirs}}
-      : $s->splitdir( $s->canonpath($_) )
-  } @_;
-
+  ($self->{volume}, my $dirs) = $s->splitpath( $s->canonpath($first) , 1);
+  $self->{dirs} = [$s->splitdir($s->catdir($dirs, @_))];
 
   return $self;
 }
-
-sub file_class { "Path::Class::File" }
 
 sub is_dir { 1 }
 
@@ -86,10 +62,8 @@ sub volume { shift()->{volume} }
 
 sub file {
   local $Path::Class::Foreign = $_[0]->{file_spec_class} if $_[0]->{file_spec_class};
-  return $_[0]->file_class->new(@_);
+  return Path::Class::File->new(@_);
 }
-
-sub basename { shift()->{dirs}[-1] }
 
 sub dir_list {
   my $self = shift;
@@ -106,11 +80,6 @@ sub dir_list {
   return @$d[$offset .. $length + $offset - 1];
 }
 
-sub components {
-  my $self = shift;
-  return $self->dir_list(@_);
-}
-
 sub subdir {
   my $self = shift;
   return $self->new($self, @_);
@@ -123,7 +92,7 @@ sub parent {
 
   if ($self->is_absolute) {
     my $parent = $self->new($self);
-    pop @{$parent->{dirs}} if @$dirs > 1;
+    pop @{$parent->{dirs}};
     return $parent;
 
   } elsif ($self eq $curdir) {
@@ -158,32 +127,6 @@ sub remove {
   rmdir( shift() );
 }
 
-sub traverse {
-  my $self = shift;
-  my ($callback, @args) = @_;
-  my @children = $self->children;
-  return $self->$callback(
-    sub {
-      my @inner_args = @_;
-      return map { $_->traverse($callback, @inner_args) } @children;
-    },
-    @args
-  );
-}
-
-sub traverse_if {
-  my $self = shift;
-  my ($callback, $condition, @args) = @_;
-  my @children = grep { $condition->($_) } $self->children;
-  return $self->$callback(
-    sub {
-      my @inner_args = @_;
-      return map { $_->traverse_if($callback, $condition, @inner_args) } @children;
-    },
-    @args
-  );
-}
-
 sub recurse {
   my $self = shift;
   my %opts = (preorder => 1, depthfirst => 0, @_);
@@ -198,18 +141,14 @@ sub recurse {
     $opts{depthfirst} && $opts{preorder}
     ? sub {
       my $dir = shift;
-      my $ret = $callback->($dir);
-      unless( ($ret||'') eq $self->PRUNE ) {
-          unshift @queue, $dir->children;
-      }
+      $callback->($dir);
+      unshift @queue, $dir->children;
     }
     : $opts{preorder}
     ? sub {
       my $dir = shift;
-      my $ret = $callback->($dir);
-      unless( ($ret||'') eq $self->PRUNE ) {
-          push @queue, $dir->children;
-      }
+      $callback->($dir);
+      push @queue, $dir->children;
     }
     : sub {
       my $dir = shift;
@@ -234,20 +173,13 @@ sub children {
   my $dh = $self->open or Carp::croak( "Can't open directory $self: $!" );
   
   my @out;
-  while (defined(my $entry = $dh->read)) {
-    next if !$opts{all} && $self->_is_local_dot_dir($entry);
-    next if ($opts{no_hidden} && $entry =~ /^\./);
+  while (my $entry = $dh->read) {
+    # XXX What's the right cross-platform way to do this?
+    next if (!$opts{all} && ($entry eq '.' || $entry eq '..'));
     push @out, $self->file($entry);
     $out[-1] = $self->subdir($entry) if -d $out[-1];
   }
   return @out;
-}
-
-sub _is_local_dot_dir {
-  my $self = shift;
-  my $dir  = shift;
-
-  return ($dir eq $Updir or $dir eq $Curdir);
 }
 
 sub next {
@@ -259,7 +191,6 @@ sub next {
   my $next = $self->{dh}->read;
   unless (defined $next) {
     delete $self->{dh};
-    ## no critic
     return undef;
   }
   
@@ -270,13 +201,12 @@ sub next {
 }
 
 sub subsumes {
-  Carp::croak "Too many arguments given to subsumes()" if $#_ > 2;
   my ($self, $other) = @_;
-  Carp::croak( "No second entity given to subsumes()" ) unless $other;
-
-  $other = $self->new($other) unless eval{$other->isa( "Path::Class::Entity")} ;
+  die "No second entity given to subsumes()" unless $other;
+  
+  $other = $self->new($other) unless UNIVERSAL::isa($other, __PACKAGE__);
   $other = $other->dir unless $other->is_dir;
-
+  
   if ($self->is_absolute) {
     $other = $other->absolute;
   } elsif ($other->is_absolute) {
@@ -286,19 +216,14 @@ sub subsumes {
   $self = $self->cleanup;
   $other = $other->cleanup;
 
-  if ($self->volume || $other->volume) {
+  if ($self->volume) {
     return 0 unless $other->volume eq $self->volume;
   }
 
   # The root dir subsumes everything (but ignore the volume because
   # we've already checked that)
   return 1 if "@{$self->{dirs}}" eq "@{$self->new('')->{dirs}}";
-
-  # The current dir subsumes every relative path (unless starting with updir)
-  if ($self eq $self->_spec->curdir) {
-    return $other->{dirs}[0] ne $self->_spec->updir;
-  }
-
+  
   my $i = 0;
   while ($i <= $#{ $self->{dirs} }) {
     return 0 if $i > $#{ $other->{dirs} };
@@ -309,19 +234,8 @@ sub subsumes {
 }
 
 sub contains {
-  Carp::croak "Too many arguments given to contains()" if $#_ > 2;
   my ($self, $other) = @_;
-  Carp::croak "No second entity given to contains()" unless $other;
-  return unless -d $self and (-e $other or -l $other);
-
-  $other = $self->new($other) unless eval{$other->isa("Path::Class::Entity")};
-  $other->resolve;
-  return $self->subsumes($other);
-}
-
-sub tempfile {
-  my $self = shift;
-  return File::Temp::tempfile(@_, DIR => $self->stringify);
+  return !!(-d $self and (-e $other or -l $other) and $self->subsumes($other));
 }
 
 1;
@@ -331,13 +245,9 @@ __END__
 
 Path::Class::Dir - Objects representing directories
 
-=head1 VERSION
-
-version 0.36
-
 =head1 SYNOPSIS
 
-  use Path::Class;  # Exports dir() by default
+  use Path::Class qw(dir);  # Export a short constructor
   
   my $dir = dir('foo', 'bar');       # Path::Class::Dir object
   my $dir = Path::Class::Dir->new('foo', 'bar');  # Same thing
@@ -450,14 +360,10 @@ Returns the volume (e.g. C<C:> on Windows, C<Macintosh HD:> on Mac OS,
 etc.) of the directory object, if any.  Otherwise, returns the empty
 string.
 
-=item $dir->basename
-
-Returns the last directory name of the path as a string.
-
 =item $dir->is_dir
 
 Returns a boolean value indicating whether this object represents a
-directory.  Not surprisingly, L<Path::Class::File> objects always
+directory.  Not surprisingly, C<Path::Class::File> objects always
 return false, and C<Path::Class::Dir> objects always return true.
 
 =item $dir->is_absolute
@@ -489,7 +395,7 @@ path.
 
 =item $file = $dir->file( <dir1>, <dir2>, ..., <file> )
 
-Returns a L<Path::Class::File> object representing an entry in C<$dir>
+Returns a C<Path::Class::File> object representing an entry in C<$dir>
 or one of its subdirectories.  Internally, this just calls C<<
 Path::Class::File->new( @_ ) >>.
 
@@ -537,7 +443,7 @@ directories:
 
 =item @list = $dir->children
 
-Returns a list of L<Path::Class::File> and/or C<Path::Class::Dir>
+Returns a list of C<Path::Class::File> and/or C<Path::Class::Dir>
 objects listed in this directory, or in scalar context the number of
 such objects.  Obviously, it is necessary for C<$dir> to
 exist and be readable in order to find its children.
@@ -554,13 +460,6 @@ the C<all> parameter:
 
   @c = $dir->children(); # Just the children
   @c = $dir->children(all => 1); # All entries
-
-In addition, there's a C<no_hidden> parameter that will exclude all
-normally "hidden" entries - on Unix this means excluding all entries
-that begin with a dot (C<.>):
-
-  @c = $dir->children(no_hidden => 1); # Just normally-visible entries
-
 
 =item $abs = $dir->absolute
 
@@ -584,7 +483,7 @@ I<specs>, not whether C<$dir> actually contains C<$other> on the
 filesystem.
 
 The C<$other> argument may be a C<Path::Class::Dir> object, a
-L<Path::Class::File> object, or a string.  In the latter case, we
+C<Path::Class::File> object, or a string.  In the latter case, we
 assume it's a directory.
 
   # Examples:
@@ -641,18 +540,10 @@ number of entries in the directory list; C<dir_list(OFFSET)> returns
 the single element at that offset; C<dir_list(OFFSET, LENGTH)> returns
 the final element that would have been returned in a list context.
 
-=item $dir->components
-
-Identical to C<dir_list()>.  It exists because there's an analogous
-method C<dir_list()> in the C<Path::Class::File> class that also
-returns the basename string, so this method lets someone call
-C<components()> without caring whether the object is a file or a
-directory.
-
 =item $fh = $dir->open()
 
 Passes C<$dir> to C<< IO::Dir->open >> and returns the result as an
-L<IO::Dir> object.  If the opening fails, C<undef> is returned and
+C<IO::Dir> object.  If the opening fails, C<undef> is returned and
 C<$!> is set.
 
 =item $dir->mkpath($verbose, $mode)
@@ -672,43 +563,12 @@ indicating whether or not the directory was successfully removed.
 This method is mainly provided for consistency with
 C<Path::Class::File>'s C<remove()> method.
 
-=item $dir->tempfile(...)
-
-An interface to L<File::Temp>'s C<tempfile()> function.  Just like
-that function, if you call this in a scalar context, the return value
-is the filehandle and the file is C<unlink>ed as soon as possible
-(which is immediately on Unix-like platforms).  If called in a list
-context, the return values are the filehandle and the filename.
-
-The given directory is passed as the C<DIR> parameter.
-
-Here's an example of pretty good usage which doesn't allow race
-conditions, won't leave yucky tempfiles around on your filesystem,
-etc.:
-
-  my $fh = $dir->tempfile;
-  print $fh "Here's some data...\n";
-  seek($fh, 0, 0);
-  while (<$fh>) { do something... }
-
-Or in combination with a C<fork>:
-
-  my $fh = $dir->tempfile;
-  print $fh "Here's some more data...\n";
-  seek($fh, 0, 0);
-  if ($pid=fork()) {
-    wait;
-  } else {
-    something($_) while <$fh>;
-  }
-
-
 =item $dir_or_file = $dir->next()
 
 A convenient way to iterate through directory contents.  The first
 time C<next()> is called, it will C<open()> the directory and read the
 first item from it, returning the result as a C<Path::Class::Dir> or
-L<Path::Class::File> object (depending, of course, on its actual
+C<Path::Class::File> object (depending, of course, on its actual
 type).  Each subsequent call to C<next()> will simply iterate over the
 directory's contents, until there are no more items in the directory,
 and then the undefined value is returned.  For example, to iterate
@@ -724,74 +584,12 @@ If an error occurs when opening the directory (for instance, it
 doesn't exist or isn't readable), C<next()> will throw an exception
 with the value of C<$!>.
 
-=item $dir->traverse( sub { ... }, @args )
-
-Calls the given callback for the root, passing it a continuation
-function which, when called, will call this recursively on each of its
-children. The callback function should be of the form:
-
-  sub {
-    my ($child, $cont, @args) = @_;
-    # ...
-  }
-
-For instance, to calculate the number of files in a directory, you
-can do this:
-
-  my $nfiles = $dir->traverse(sub {
-    my ($child, $cont) = @_;
-    return sum($cont->(), ($child->is_dir ? 0 : 1));
-  });
-
-or to calculate the maximum depth of a directory:
-
-  my $depth = $dir->traverse(sub {
-    my ($child, $cont, $depth) = @_;
-    return max($cont->($depth + 1), $depth);
-  }, 0);
-
-You can also choose not to call the callback in certain situations:
-
-  $dir->traverse(sub {
-    my ($child, $cont) = @_;
-    return if -l $child; # don't follow symlinks
-    # do something with $child
-    return $cont->();
-  });
-
-=item $dir->traverse_if( sub { ... }, sub { ... }, @args )
-
-traverse with additional "should I visit this child" callback.
-Particularly useful in case examined tree contains inaccessible
-directories.
-
-Canonical example:
-
-  $dir->traverse_if(
-    sub {
-       my ($child, $cont) = @_;
-       # do something with $child
-       return $cont->();
-    }, 
-    sub {
-       my ($child) = @_;
-       # Process only readable items
-       return -r $child;
-    });
-
-Second callback gets single parameter: child. Only children for
-which it returns true will be processed by the first callback.
-
-Remaining parameters are interpreted as in traverse, in particular
-C<traverse_if(callback, sub { 1 }, @args> is equivalent to
-C<traverse(callback, @args)>.
-
 =item $dir->recurse( callback => sub {...} )
 
 Iterates through this directory and all of its children, and all of
 its children's children, etc., calling the C<callback> subroutine for
-each entry.  This is a lot like what the L<File::Find> module does,
-and of course C<File::Find> will work fine on L<Path::Class> objects,
+each entry.  This is a lot like what the C<File::Find> module does,
+and of course C<File::Find> will work fine on C<Path::Class> objects,
 but the advantage of the C<recurse()> method is that it will also feed
 your callback routine C<Path::Class> objects rather than just pathname
 strings.
@@ -806,13 +604,6 @@ preorder, breadth-first search, i.e. C<< depthfirst => 0, preorder => 1 >>.
 At the time of this writing, all combinations of these two parameters
 are supported I<except> C<< depthfirst => 0, preorder => 0 >>.
 
-C<callback> is normally not required to return any value. If it
-returns special constant C<Path::Class::Entity::PRUNE()> (more easily
-available as C<< $item->PRUNE >>),  no children of analyzed
-item will be analyzed (mostly as if you set C<$File::Find::prune=1>). Of course
-pruning is available only in C<preorder>, in postorder return value
-has no effect.
-
 =item $st = $file->stat()
 
 Invokes C<< File::stat::stat() >> on this directory and returns a
@@ -823,20 +614,14 @@ C<File::stat> object representing the result.
 Same as C<stat()>, but if C<$file> is a symbolic link, C<lstat()>
 stats the link instead of the directory the link points to.
 
-=item $class = $file->file_class()
-
-Returns the class which should be used to create file objects.
-
-Generally overridden whenever this class is subclassed.
-
 =back
 
 =head1 AUTHOR
 
-Ken Williams, kwilliams@cpan.org
+Ken Williams, ken@mathforum.org
 
 =head1 SEE ALSO
 
-L<Path::Class>, L<Path::Class::File>, L<File::Spec>
+Path::Class, Path::Class::File, File::Spec
 
 =cut

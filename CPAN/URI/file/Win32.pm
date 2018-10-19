@@ -6,8 +6,12 @@ require URI::file::Base;
 use strict;
 use URI::Escape qw(uri_unescape);
 
+# the authority is always null in Win32 file URLs.
+# XXX - Slim Devices change.
 sub _file_extract_authority
 {
+    return '';
+
     my $class = shift;
 
     return $class->SUPER::_file_extract_authority($_[0])
@@ -28,6 +32,7 @@ sub _file_extract_path
 {
     my($class, $path) = @_;
     $path =~ s,\\,/,g;
+    $path =~ s,$[^/]+(//+),/,g; # XXX - Slim Devices change.
     #$path =~ s,//+,/,g;
     $path =~ s,(/\.)+/,/,g;
 

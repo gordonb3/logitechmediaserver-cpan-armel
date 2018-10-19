@@ -1,17 +1,18 @@
 package Test::Simple;
 
-use 5.006;
+use 5.004;
 
-use strict;
+use strict 'vars';
+use vars qw($VERSION @ISA @EXPORT);
+$VERSION = '0.62';
+$VERSION = eval $VERSION;    # make the alpha version come out as a number
 
-our $VERSION = '1.001002';
-$VERSION = eval $VERSION;    ## no critic (BuiltinFunctions::ProhibitStringyEval)
-
-use Test::Builder::Module 0.99;
-our @ISA    = qw(Test::Builder::Module);
-our @EXPORT = qw(ok);
+use Test::Builder::Module;
+@ISA    = qw(Test::Builder::Module);
+@EXPORT = qw(ok);
 
 my $CLASS = __PACKAGE__;
+
 
 =head1 NAME
 
@@ -76,9 +77,10 @@ will do what you mean (fail if stuff is empty)
 
 =cut
 
-sub ok ($;$) {    ## no critic (Subroutines::ProhibitSubroutinePrototypes)
-    return $CLASS->builder->ok(@_);
+sub ok ($;$) {
+    $CLASS->builder->ok(@_);
 }
+
 
 =back
 
@@ -121,7 +123,7 @@ Here's an example of a simple .t file for the fictional Film module.
                              Rating   => 'R',
                              NumExplodingSheep => 1
                            });
-    ok( defined($btaste) && ref $btaste eq 'Film',     'new() works' );
+    ok( defined($btaste) && ref $btaste eq 'Film,     'new() works' );
 
     ok( $btaste->Title      eq 'Bad Taste',     'Title() get'    );
     ok( $btaste->Director   eq 'Peter Jackson', 'Director() get' );
@@ -162,9 +164,9 @@ Unfortunately, I can't differentiate any further.
 
 =head1 NOTES
 
-Test::Simple is B<explicitly> tested all the way back to perl 5.6.0.
+Test::Simple is B<explicitly> tested all the way back to perl 5.004.
 
-Test::Simple is thread-safe in perl 5.8.1 and up.
+Test::Simple is thread-safe in perl 5.8.0 and up.
 
 =head1 HISTORY
 
@@ -189,9 +191,23 @@ Test::More.  Test::Simple is 100% forward compatible with Test::More
 (i.e. you can just use Test::More instead of Test::Simple in your
 programs and things will still work).
 
-=back
+=item L<Test>
 
-Look in Test::More's SEE ALSO for more testing modules.
+The original Perl testing module.
+
+=item L<Test::Unit>
+
+Elaborate unit testing.
+
+=item L<Test::Inline>, L<SelfTest>
+
+Embed tests in your code!
+
+=item L<Test::Harness>
+
+Interprets the output of your test program.
+
+=back
 
 
 =head1 AUTHORS
@@ -202,7 +218,7 @@ E<lt>schwern@pobox.comE<gt>, wardrobe by Calvin Klein.
 
 =head1 COPYRIGHT
 
-Copyright 2001-2008 by Michael G Schwern E<lt>schwern@pobox.comE<gt>.
+Copyright 2001, 2002, 2004 by Michael G Schwern E<lt>schwern@pobox.comE<gt>.
 
 This program is free software; you can redistribute it and/or 
 modify it under the same terms as Perl itself.

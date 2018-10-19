@@ -1,34 +1,18 @@
 package Net::HTTP::Methods;
 
+# $Id: Methods.pm 8931 2006-08-11 16:44:43Z dsully $
+
 require 5.005;  # 4-arg substr
 
 use strict;
 use vars qw($VERSION);
-use URI;
 
-$VERSION = "6.09";
-$VERSION = eval $VERSION;
+$VERSION = "1.02";
 
 my $CRLF = "\015\012";   # "\r\n" is not portable
 
-*_bytes = defined(&utf8::downgrade) ?
-    sub {
-        unless (utf8::downgrade($_[0], 1)) {
-            require Carp;
-            Carp::croak("Wide character in HTTP request (bytes required)");
-        }
-        return $_[0];
-    }
-    :
-    sub {
-        return $_[0];
-    };
-
-
 sub new {
-    my $class = shift;
-    unshift(@_, "Host") if @_ == 1;
-    my %cnf = @_;
+    my($class, %cnf) = @_;
     require Symbol;
     my $self = bless Symbol::gensym(), $class;
     return $self->http_configure(\%cnf);
@@ -38,40 +22,17 @@ sub http_configure {
     my($self, $cnf) = @_;
 
     die "Listen option not allowed" if $cnf->{Listen};
-    my $explicit_host = (exists $cnf->{Host});
+    my $explict_host = (exists $cnf->{Host});
     my $host = delete $cnf->{Host};
     my $peer = $cnf->{PeerAddr} || $cnf->{PeerHost};
-    if (!$peer) {
-	die "No Host option provided" unless $host;
-	$cnf->{PeerAddr} = $peer = $host;
+    if ($host) {
+	$cnf->{PeerAddr} = $host unless $peer;
     }
-
-    # CONNECTIONS
-    # PREFER: port number from PeerAddr, then PeerPort, then http_default_port
-    my $peer_uri = URI->new("http://$peer");
-    $cnf->{"PeerPort"} =  $peer_uri->_port || $cnf->{PeerPort} ||  $self->http_default_port;
-    $cnf->{"PeerAddr"} = $peer_uri->host;
-
-    # HOST header:
-    # If specified but blank, ignore.
-    # If specified with a value, add the port number
-    # If not specified, set to PeerAddr and port number
-    # ALWAYS: If IPv6 address, use [brackets]  (thanks to the URI package)
-    # ALWAYS: omit port number if http_default_port
-    if (($host) || (! $explicit_host)) {
-        my $uri =  ($explicit_host) ? URI->new("http://$host") : $peer_uri->clone;
-        if (!$uri->_port) {
-            # Always use *our*  $self->http_default_port  instead of URI's  (Covers HTTP, HTTPS)
-            $uri->port( $cnf->{PeerPort} ||  $self->http_default_port);
-        }
-        my $host_port = $uri->host_port;               # Returns host:port or [ipv6]:port
-        my $remove = ":" . $self->http_default_port;   # we want to remove the default port number
-        if (substr($host_port,0-length($remove)) eq $remove) {
-            substr($host_port,0-length($remove)) = "";
-        }
-        $host = $host_port;
+    elsif (!$explict_host) {
+	$host = $peer;
+	$host =~ s/:.*//;
     }
-
+    $cnf->{PeerPort} = $self->http_default_port unless $cnf->{PeerPort};
     $cnf->{Proto} = 'tcp';
 
     my $keep_alive = delete $cnf->{KeepAlive};
@@ -81,12 +42,16 @@ sub http_configure {
     $peer_http_version = "1.0" unless defined $peer_http_version;
     my $send_te = delete $cnf->{SendTE};
     my $max_line_length = delete $cnf->{MaxLineLength};
-    $max_line_length = 8*1024 unless defined $max_line_length;
+    $max_line_length = 4*1024 unless defined $max_line_length;
     my $max_header_lines = delete $cnf->{MaxHeaderLines};
     $max_header_lines = 128 unless defined $max_header_lines;
 
     return undef unless $self->http_connect($cnf);
 
+    if ($host && $host !~ /:/) {
+	my $p = $self->peerport;
+	$host .= ":$p" if $p != $self->http_default_port;
+    }
     $self->host($host);
     $self->keep_alive($keep_alive);
     $self->send_te($send_te);
@@ -174,8 +139,8 @@ sub format_request {
     if ($given{te}) {
 	push(@connection, "TE") unless grep lc($_) eq "te", @connection;
     }
-    elsif ($self->send_te && gunzip_ok()) {
-	# gzip is less wanted since the IO::Uncompress::Gunzip interface for
+    elsif ($self->send_te && zlib_ok()) {
+	# gzip is less wanted since the Compress::Zlib interface for
 	# it does not really allow chunked decoding to take place easily.
 	push(@h2, "TE: deflate,gzip;q=0.3");
 	push(@connection, "TE");
@@ -199,7 +164,7 @@ sub format_request {
 	push(@h2, "Host: $h") if $h;
     }
 
-    return _bytes(join($CRLF, "$method $uri HTTP/$ver", @h2, @h, "", $content));
+    return join($CRLF, "$method $uri HTTP/$ver", @h2, @h, "", $content);
 }
 
 
@@ -211,13 +176,13 @@ sub write_request {
 sub format_chunk {
     my $self = shift;
     return $_[0] unless defined($_[0]) && length($_[0]);
-    return _bytes(sprintf("%x", length($_[0])) . $CRLF . $_[0] . $CRLF);
+    return sprintf("%x", length($_[0])) . $CRLF . $_[0] . $CRLF;
 }
 
 sub write_chunk {
     my $self = shift;
     return 1 unless defined($_[0]) && length($_[0]);
-    $self->print(_bytes(sprintf("%x", length($_[0])) . $CRLF . $_[0] . $CRLF));
+    $self->print(sprintf("%x", length($_[0])) . $CRLF . $_[0] . $CRLF);
 }
 
 sub format_chunk_eof {
@@ -226,7 +191,7 @@ sub format_chunk_eof {
     while (@_) {
 	push(@h, sprintf "%s: %s$CRLF", splice(@_, 0, 2));
     }
-    return _bytes(join("", "0$CRLF", @h, $CRLF));
+    return join("", "0$CRLF", @h, $CRLF);
 }
 
 sub write_chunk_eof {
@@ -245,7 +210,6 @@ sub my_read {
 	    return length($_[0]);
 	}
 	else {
-	    die "read timeout" unless $self->can_read;
 	    return $self->sysread($_[0], $len);
 	}
     }
@@ -254,7 +218,6 @@ sub my_read {
 
 sub my_readline {
     my $self = shift;
-    my $what = shift;
     for (${*$self}{'http_buf'}) {
 	my $max_line_length = ${*$self}{'http_max_line_length'};
 	my $pos;
@@ -262,78 +225,22 @@ sub my_readline {
 	    # find line ending
 	    $pos = index($_, "\012");
 	    last if $pos >= 0;
-	    die "$what line too long (limit is $max_line_length)"
+	    die "Line too long (limit is $max_line_length)"
 		if $max_line_length && length($_) > $max_line_length;
 
 	    # need to read more data to find a line ending
-            my $new_bytes = 0;
-
-          READ:
-            {   # wait until bytes start arriving
-                $self->can_read
-                     or die "read timeout";
-
-                # consume all incoming bytes
-                while(1) {
-                    my $bytes_read = $self->sysread($_, 1024, length);
-                    if(defined $bytes_read) {
-                        $new_bytes += $bytes_read;
-                        last if $bytes_read < 1024;
-                    }
-                    elsif($!{EINTR} || $!{EAGAIN} || $!{EWOULDBLOCK}) {
-                        redo READ;
-                    }
-                    else {
-                        # if we have already accumulated some data let's at
-                        # least return that as a line
-                        length or die "$what read failed: $!";
-                        last;
-                    }
-                }
-
-                # no line-ending, no new bytes
-                return length($_) ? substr($_, 0, length($_), "") : undef
-                    if $new_bytes==0;
-            }
+	    my $n = $self->sysread($_, 1024, length);
+	    if (!$n) {
+		return undef unless length;
+		return substr($_, 0, length, "");
+	    }
 	}
-	die "$what line too long ($pos; limit is $max_line_length)"
+	die "Line too long ($pos; limit is $max_line_length)"
 	    if $max_line_length && $pos > $max_line_length;
 
 	my $line = substr($_, 0, $pos+1, "");
 	$line =~ s/(\015?\012)\z// || die "Assert";
 	return wantarray ? ($line, $1) : $line;
-    }
-}
-
-
-sub can_read {
-    my $self = shift;
-    return 1 unless defined(fileno($self));
-    return 1 if $self->isa('IO::Socket::SSL') && $self->pending;
-
-    # With no timeout, wait forever.  An explicit timeout of 0 can be
-    # used to just check if the socket is readable without waiting.
-    my $timeout = @_ ? shift : (${*$self}{io_socket_timeout} || undef);
-
-    my $fbits = '';
-    vec($fbits, fileno($self), 1) = 1;
-  SELECT:
-    {
-        my $before;
-        $before = time if $timeout;
-        my $nfound = select($fbits, undef, undef, $timeout);
-        if ($nfound < 0) {
-            if ($!{EINTR} || $!{EAGAIN}) {
-                # don't really think EAGAIN can happen here
-                if ($timeout) {
-                    $timeout -= time - $before;
-                    $timeout = 0 if $timeout < 0;
-                }
-                redo SELECT;
-            }
-            die "select failed: $!";
-        }
-        return $nfound > 0;
     }
 }
 
@@ -366,8 +273,8 @@ sub _read_header_lines {
     my @headers;
     my $line_count = 0;
     my $max_header_lines = ${*$self}{'http_max_header_lines'};
-    while (my $line = my_readline($self, 'Header')) {
-	if ($line =~ /^(\S+?)\s*:\s*(.*)/s) {
+    while (my $line = my_readline($self)) {
+	if ($line =~ /^(\S+)\s*:\s*(.*)/s) {
 	    push(@headers, $1, $2);
 	}
 	elsif (@headers && $line =~ s/^\s+//) {
@@ -394,7 +301,7 @@ sub read_response_headers {
     my($self, %opt) = @_;
     my $laxed = $opt{laxed};
 
-    my($status, $eol) = my_readline($self, 'Status');
+    my($status, $eol) = my_readline($self);
     unless (defined $status) {
 	die "Server closed connection without sending any data back";
     }
@@ -461,34 +368,29 @@ sub read_entity_body {
 	delete ${*$self}{'http_bytes'};
 	my $method = shift(@{${*$self}{'http_request_method'}});
 	my $status = ${*$self}{'http_status'};
-	if ($method eq "HEAD") {
-	    # this response is always empty regardless of other headers
+	if ($method eq "HEAD" || $status =~ /^(?:1|[23]04)/) {
+	    # these responses are always empty
 	    $bytes = 0;
 	}
 	elsif (my $te = ${*$self}{'http_te'}) {
 	    my @te = split(/\s*,\s*/, lc($te));
 	    die "Chunked must be last Transfer-Encoding '$te'"
 		unless pop(@te) eq "chunked";
-	    pop(@te) while @te && $te[-1] eq "chunked";  # ignore repeated chunked spec
 
 	    for (@te) {
-		if ($_ eq "deflate" && inflate_ok()) {
-		    #require Compress::Raw::Zlib;
-		    my ($i, $status) = Compress::Raw::Zlib::Inflate->new();
-		    die "Can't make inflator: $status" unless $i;
-		    $_ = sub { my $out; $i->inflate($_[0], \$out); $out }
+		if ($_ eq "deflate" && zlib_ok()) {
+		    #require Compress::Zlib;
+		    my $i = Compress::Zlib::inflateInit();
+		    die "Can't make inflator" unless $i;
+		    $_ = sub { scalar($i->inflate($_[0])) }
 		}
-		elsif ($_ eq "gzip" && gunzip_ok()) {
-		    #require IO::Uncompress::Gunzip;
+		elsif ($_ eq "gzip" && zlib_ok()) {
+		    #require Compress::Zlib;
 		    my @buf;
 		    $_ = sub {
 			push(@buf, $_[0]);
-			return "" unless $_[1];
-			my $input = join("", @buf);
-			my $output;
-			IO::Uncompress::Gunzip::gunzip(\$input, \$output, Transparent => 0)
-			    or die "Can't gunzip content: $IO::Uncompress::Gunzip::GunzipError";
-			return \$output;
+			return Compress::Zlib::memGunzip(join("", @buf)) if $_[1];
+			return "";
 		    };
 		}
 		elsif ($_ eq "identity") {
@@ -507,11 +409,6 @@ sub read_entity_body {
 	elsif (defined(my $content_length = ${*$self}{'http_content_length'})) {
 	    $bytes = $content_length;
 	}
-        elsif ($status =~ /^(?:1|[23]04)/) {
-            # RFC 2616 says that these responses should always be empty
-            # but that does not appear to be true in practice [RT#17907]
-            $bytes = 0;
-        }
 	else {
 	    # XXX Multi-Part types are self delimiting, but RFC 2616 says we
 	    # only has to deal with 'multipart/byteranges'
@@ -531,11 +428,11 @@ sub read_entity_body {
 	#   $chunked > 0:    bytes left in current chunk to read
 
 	if ($chunked <= 0) {
-	    my $line = my_readline($self, 'Entity body');
+	    my $line = my_readline($self);
 	    if ($chunked == 0) {
 		die "Missing newline after chunk data: '$line'"
 		    if !defined($line) || $line ne "";
-		$line = my_readline($self, 'Entity body');
+		$line = my_readline($self);
 	    }
 	    die "EOF when chunk header expected" unless defined($line);
 	    my $chunk_len = $line;
@@ -544,7 +441,6 @@ sub read_entity_body {
 		die "Bad chunk-size in HTTP response: $line";
 	    }
 	    $chunked = hex($1);
-	    ${*$self}{'http_chunked'} = $chunked;
 	    if ($chunked == 0) {
 		${*$self}{'http_trailers'} = [$self->_read_header_lines];
 		$$buf_ref = "";
@@ -592,7 +488,8 @@ sub read_entity_body {
 	my $n = $bytes;
 	$n = $size if $size && $size < $n;
 	$n = my_read($self, $$buf_ref, $n);
-	${*$self}{'http_bytes'} = defined $n ? $bytes - $n : $bytes;
+	return undef unless defined $n;
+	${*$self}{'http_bytes'} = $bytes - $n;
 	return $n;
     }
     else {
@@ -608,39 +505,23 @@ sub get_trailers {
 }
 
 BEGIN {
-my $gunzip_ok;
-my $inflate_ok;
+my $zlib_ok;
 
-sub gunzip_ok {
-    return $gunzip_ok if defined $gunzip_ok;
+sub zlib_ok {
+    return $zlib_ok if defined $zlib_ok;
 
-    # Try to load IO::Uncompress::Gunzip.
+    # Try to load Compress::Zlib.
     local $@;
     local $SIG{__DIE__};
-    $gunzip_ok = 0;
+    $zlib_ok = 0;
 
     eval {
-	require IO::Uncompress::Gunzip;
-	$gunzip_ok++;
+	require Compress::Zlib;
+	Compress::Zlib->VERSION(1.10);
+	$zlib_ok++;
     };
 
-    return $gunzip_ok;
-}
-
-sub inflate_ok {
-    return $inflate_ok if defined $inflate_ok;
-
-    # Try to load Compress::Raw::Zlib.
-    local $@;
-    local $SIG{__DIE__};
-    $inflate_ok = 0;
-
-    eval {
-	require Compress::Raw::Zlib;
-	$inflate_ok++;
-    };
-
-    return $inflate_ok;
+    return $zlib_ok;
 }
 
 } # BEGIN

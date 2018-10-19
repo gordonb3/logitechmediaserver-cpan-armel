@@ -1,17 +1,13 @@
 package Net::HTTP::NB;
 
+# $Id: NB.pm 8931 2006-08-11 16:44:43Z dsully $
+
 use strict;
 use vars qw($VERSION @ISA);
 
-$VERSION = "6.09";
-$VERSION = eval $VERSION;
-
+$VERSION = "0.03";
 require Net::HTTP;
 @ISA=qw(Net::HTTP);
-
-sub can_read {
-    return 1;
-}
 
 sub sysread {
     my $self = $_[0];
@@ -43,7 +39,7 @@ sub read_entity_body {
     ${*$self}{'httpnb_read_count'} = 0;
     ${*$self}{'httpnb_save'} = ${*$self}{'http_buf'};
     # XXX I'm not so sure this does the correct thing in case of
-    # transfer-encoding transforms
+    # transfer-encoding tranforms
     my $n = eval { $self->SUPER::read_entity_body(@_); };
     if ($@) {
 	$_[0] = "";
