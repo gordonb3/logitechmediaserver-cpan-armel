@@ -1,3 +1,8 @@
+> #### Deprecation notice
+> Logitechmediaserver 7.8.0 is pretty old now and I have upgraded to version 8.x quite some time ago. With Perl 5.32 having been marked as stable by Gentoo it is time to archive this repository as I'm no longer able to verify that it runs correctly with newly built modules after Perl 5.30.
+
+---
+
 # logitechmediaserver-cpan-armel
 
 #### Description
